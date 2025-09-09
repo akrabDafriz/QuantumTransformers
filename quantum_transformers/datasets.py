@@ -1,224 +1,139 @@
-import os
-import tarfile
-
-import numpy as np
-import gdown
-import tensorflow_datasets as tfds
 import tensorflow as tf
-# Ensure TF does not see GPU and grab all GPU memory.
-tf.config.set_visible_devices([], device_type='GPU')
+import tensorflow_datasets as tfds
+from tensorflow_text import WordpieceTokenizer
 
-options = tf.data.Options()
-options.deterministic = True
+# Imports for MLM data handling
+from datasets import load_dataset
+from transformers import AutoTokenizer, DataCollatorForLanguageModeling
+import torch
 
 
-class NumPyFolderDataset(tfds.core.GeneratorBasedBuilder):
+def get_dataloaders(dataset_name, batch_size, data_dir=None, **kwargs):
+    if dataset_name == "imdb":
+        return get_imdb_dataloaders(batch_size, data_dir, **kwargs)
+    elif dataset_name == "mlm":
+        return get_mlm_dataloaders(batch_size, **kwargs)
+    else:
+        raise ValueError(f"Unknown dataset {dataset_name}")
+
+
+def get_imdb_dataloaders(batch_size, data_dir, max_vocab_size=20_000, max_seq_len=512):
+    (ds_train, ds_val, ds_test), ds_info = tfds.load('imdb_reviews', split=['train[:90%]', 'train[90%:]', 'test'],
+                                                    data_dir=data_dir, as_supervised=True, with_info=True)
+    
+    print(f"Cardinalities (train, val, test): {ds_train.cardinality().numpy()} {ds_val.cardinality().numpy()} {ds_test.cardinality().numpy()}")
+    
+    # Vocabulary and tokenizer
+    # Note that this is not a great way of building a vocabulary since it only uses the training set,
+    # and it might also be slow. It is however convenient for a quick-and-dirty implementation.
+    vocab = set()
+    tokenizer = WordpieceTokenizer(vocab)
+    for review, _ in ds_train.take(ds_train.cardinality()):
+        tokens = tokenizer.tokenize(review)
+        vocab.update(tokens.numpy().tolist())
+    
+    # Sort the vocabulary and limit its size
+    vocab = sorted(list(vocab))
+    vocab = vocab[:max_vocab_size]
+    
+    # Create the final tokenizer
+    tokenizer = WordpieceTokenizer(vocab, token_out_type=tf.int32)
+
+    def encode(text, label):
+        encoded_text = tokenizer.tokenize(text)
+        return encoded_text, label
+    
+    def pad_and_batch(ds, batch_size):
+        return ds.map(encode).padded_batch(batch_size, padded_shapes=([max_seq_len], []))
+
+    ds_train = pad_and_batch(ds_train, batch_size)
+    ds_val = pad_and_batch(ds_val, batch_size)
+    ds_test = pad_and_batch(ds_test, batch_size)
+    
+    return (tfds.as_numpy(ds_train), tfds.as_numpy(ds_val), tfds.as_numpy(ds_test)), vocab, tokenizer
+
+
+# Updated function for MLM data
+def get_mlm_dataloaders(batch_size, dataset_name='Helsinki-NLP/opus_books', dataset_config_name='en-es',
+                        model_checkpoint='bert-base-uncased', block_size=128, mlm_probability=0.15):
     """
-    A dataset consisting of NumPy arrays stored in folders (one folder per class).
+    Downloads and prepares a dataset for Masked Language Modeling using an efficient chunking strategy.
+    Defaults to the Helsinki-NLP/opus_books dataset.
     """
-    VERSION = tfds.core.Version('1.0.0')  # to avoid ValueError
+    # Load dataset from Hugging Face
+    raw_datasets = load_dataset(dataset_name, dataset_config_name, split='train')
 
-    def __init__(self, name, img_shape, num_classes, extracted_data_path=None, gdrive_id=None, **kwargs):
-        """Creates a NumPyFolderDataset."""
-        self.name = name
-        self.img_shape = img_shape
-        self.num_classes = num_classes
-        self.extracted_data_path = extracted_data_path
-        self.gdrive_id = gdrive_id
-        super().__init__(**kwargs)
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_checkpoint, use_fast=True)
 
-    def _info(self) -> tfds.core.DatasetInfo:
-        """Returns the dataset metadata."""
-        return self.dataset_info_from_configs(
-            features=tfds.features.FeaturesDict({
-                'image': tfds.features.Tensor(shape=self.img_shape, dtype=np.float32),
-                'label': tfds.features.ClassLabel(num_classes=self.num_classes),
-            }),
-            supervised_keys=('image', 'label')
-        )
+    def tokenize_function(examples):
+        # Extract the English text from the 'translation' column
+        english_texts = [ex['en'] for ex in examples['translation']]
+        # Tokenize without padding
+        return tokenizer(english_texts)
 
-    def _split_generators(self, _):
-        """Returns SplitGenerators."""
-        if self.extracted_data_path is not None:
-            print(f'Using existing data at {self.extracted_data_path}')
-            dataset_path = self.extracted_data_path
-        elif self.gdrive_id is not None:
-            os.makedirs(f'{self.data_dir}/{self.name}')
-            gdown.download(id=self.gdrive_id, output=f'{self.data_dir}/{self.name}.tar.xz', quiet=False)
-            with tarfile.open(f'{self.data_dir}/{self.name}.tar.xz', 'r:xz') as f:
-                print(f'Extracting {self.name}.tar.xz to {self.data_dir}')
-                f.extractall(self.data_dir)
-            os.remove(f'{self.data_dir}/{self.name}.tar.xz')
-            dataset_path = f'{self.data_dir}/{self.name}'
-        else:
-            raise ValueError('Either extracted_data_path or gdrive_id must be provided')
+    # The opus_books dataset doesn't have standard train/val/test splits, so we'll create them.
+    train_test_split = raw_datasets.train_test_split(test_size=0.1)
+    train_val_split = train_test_split['train'].train_test_split(test_size=0.1)
+    
+    temp_tokenized_datasets = {
+        'train': train_val_split['train'].map(tokenize_function, batched=True, remove_columns=["id", "translation"]),
+        'validation': train_val_split['test'].map(tokenize_function, batched=True, remove_columns=["id", "translation"]),
+        'test': train_test_split['test'].map(tokenize_function, batched=True, remove_columns=["id", "translation"])
+    }
 
-        dataset_path = tfds.core.Path(dataset_path)
-        return {
-            'train': self._generate_examples(dataset_path / 'train'),
-            'test': self._generate_examples(dataset_path / 'test'),
+    def group_texts(examples):
+        # Concatenate all texts.
+        concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
+        total_length = len(concatenated_examples[list(examples.keys())[0]])
+        # We drop the small remainder.
+        if total_length >= block_size:
+            total_length = (total_length // block_size) * block_size
+        # Split by chunks of block_size.
+        result = {
+            k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
+            for k, t in concatenated_examples.items()
         }
+        result["labels"] = result["input_ids"].copy()
+        return result
 
-    def _generate_examples(self, path):
-        """Yields examples."""
-        class_names = {c: i for i, c in enumerate(sorted([f.name for f in path.glob('*')]))}
-        for class_folder in path.glob('*'):
-            for f in class_folder.glob('*.npy'):
-                try:
-                    image = np.load(f).astype(np.float32)
-                    if image.shape != self.img_shape:
-                        # Try to transpose if channels are in the wrong place
-                        if image.shape[0] == self.img_shape[-1]:
-                            image = np.transpose(image, (1, 2, 0))
-                        elif image.shape[-1] == self.img_shape[0]:
-                            image = np.transpose(image, (2, 0, 1))
-                        else:
-                            raise ValueError(f'Unexpected image shape {image.shape} for {f}')
-                    yield f"{class_folder.name}_{f.name}", {
-                        'image': image,
-                        'label': class_names[class_folder.name],
-                    }
-                except FileNotFoundError as e:
-                    print(e)
+    tokenized_datasets = {
+        'train': temp_tokenized_datasets['train'].map(group_texts, batched=True),
+        'validation': temp_tokenized_datasets['validation'].map(group_texts, batched=True),
+        'test': temp_tokenized_datasets['test'].map(group_texts, batched=True)
+    }
 
 
-def datasets_to_dataloaders(train_dataset, val_dataset, test_dataset, batch_size, drop_remainder=True, transform=None):
-    # Shuffle train dataset
-    train_dataset = train_dataset.shuffle(10_000, reshuffle_each_iteration=True)
+    # Use PyTorch dataloaders for easier integration with DataCollator
+    tokenized_datasets['train'].set_format("torch")
+    tokenized_datasets['validation'].set_format("torch")
+    tokenized_datasets['test'].set_format("torch")
+    
+    train_dataset = tokenized_datasets["train"]
+    val_dataset = tokenized_datasets["validation"]
+    test_dataset = tokenized_datasets["test"]
 
-    # Batch
-    train_dataset = train_dataset.batch(batch_size, drop_remainder=drop_remainder)
-    val_dataset = val_dataset.batch(batch_size, drop_remainder=drop_remainder)
-    test_dataset = test_dataset.batch(batch_size, drop_remainder=drop_remainder)
+    # Data collator will take care of creating MLM inputs and labels
+    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm_probability=mlm_probability)
 
-    # Transform
-    if transform is not None:
-        train_dataset = train_dataset.map(transform, num_parallel_calls=tf.data.AUTOTUNE)
-        val_dataset = val_dataset.map(transform, num_parallel_calls=tf.data.AUTOTUNE)
-        test_dataset = test_dataset.map(transform, num_parallel_calls=tf.data.AUTOTUNE)
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=data_collator)
+    val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, collate_fn=data_collator)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, collate_fn=data_collator)
 
-    # Prefetch
-    train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
-    val_dataset = val_dataset.prefetch(tf.data.AUTOTUNE)
-    test_dataset = test_dataset.prefetch(tf.data.AUTOTUNE)
+    # Convert PyTorch dataloaders to something that yields numpy arrays
+    def torch_to_numpy_dataloader(dataloader):
+        for batch in dataloader:
+            # The collator returns a dict of torch tensors.
+            # We need to yield `(inputs, labels)`.
+            # For MLM, the `labels` are the input_ids with non-masked tokens set to -100.
+            # The model input should be the `input_ids` from the batch.
+            yield (batch['input_ids'].numpy(), batch['labels'].numpy())
+            
+    # After finding out that the Transformer model expects jnp arrays, we might want to convert the torch tensors to jnp arrays here instead of numpy arrays.
+    # However, the dataloader itself yields torch tensors, so we need to convert them to numpy arrays first. Then we can convert them to jnp arrays in the training loop.
+    # Alternatively, we could write a custom dataloader that yields jnp arrays directly, but that might be more complex.
+    # For now, we will keep it as numpy arrays and convert to jnp arrays in the training loop.
 
-    # Convert to NumPy for JAX
-    return tfds.as_numpy(train_dataset), tfds.as_numpy(val_dataset), tfds.as_numpy(test_dataset)
-
-
-def get_mnist_dataloaders(data_dir: str = '~/data', batch_size: int = 1, drop_remainder: bool = True):
-    """
-    Returns dataloaders for the MNIST dataset (computer vision, multi-class classification)
-
-    Information about the dataset: https://www.tensorflow.org/datasets/catalog/mnist
-    """
-    data_dir = os.path.expanduser(data_dir)
-
-    # Load datasets
-    train_dataset, val_dataset, test_dataset = tfds.load(name='mnist',
-                                                         split=['train[:90%]', 'train[90%:]', 'test'], as_supervised=True, data_dir=data_dir, shuffle_files=True)
-    train_dataset, val_dataset, test_dataset = train_dataset.with_options(options), val_dataset.with_options(options), test_dataset.with_options(options)
-    print("Cardinalities (train, val, test):", train_dataset.cardinality().numpy(), val_dataset.cardinality().numpy(), test_dataset.cardinality().numpy())
-
-    def normalize_image(image, label):
-        image = tf.cast(image, tf.float32) / 255.0
-        return (image - 0.1307) / 0.3081, label
-
-    return datasets_to_dataloaders(train_dataset, val_dataset, test_dataset, batch_size,
-                                   drop_remainder=drop_remainder, transform=normalize_image)
-
-
-def get_electron_photon_dataloaders(data_dir: str = '~/data', batch_size: int = 1, drop_remainder: bool = True):
-    """
-    Returns dataloaders for the electron-photon dataset (computer vision - particle physics, binary classification)
-
-    Information about the dataset: https://arxiv.org/abs/1807.11916
-    """
-    data_dir = os.path.expanduser(data_dir)
-
-    # Load datasets
-    electron_photon_builder = NumPyFolderDataset(data_dir=data_dir, name="electron-photon", gdrive_id="1VAqGQaMS5jSWV8gTXw39Opz-fNMsDZ8e",
-                                                 img_shape=(32, 32, 2), num_classes=2)
-    electron_photon_builder.download_and_prepare(download_dir=data_dir)
-    train_dataset, val_dataset, test_dataset = electron_photon_builder.as_dataset(split=['train[:90%]', 'train[90%:]', 'test'], as_supervised=True, shuffle_files=True)
-    train_dataset, val_dataset, test_dataset = train_dataset.with_options(options), val_dataset.with_options(options), test_dataset.with_options(options)
-    print("Cardinalities (train, val, test):", train_dataset.cardinality().numpy(), val_dataset.cardinality().numpy(), test_dataset.cardinality().numpy())
-
-    return datasets_to_dataloaders(train_dataset, val_dataset, test_dataset, batch_size,
-                                   drop_remainder=drop_remainder)
-
-
-def get_quark_gluon_dataloaders(data_dir: str = '~/data', batch_size: int = 1, drop_remainder: bool = True):
-    """
-    Returns dataloaders for the quark-gluon dataset (computer vision - particle physics, binary classification)
-
-    Information about the dataset: https://arxiv.org/abs/1902.08276
-    """
-    data_dir = os.path.expanduser(data_dir)
-
-    # Load datasets
-    quark_gluon_builder = NumPyFolderDataset(data_dir=data_dir, name="quark-gluon", gdrive_id="1PL2YEr5V__zUZVuUfGdUvFTkE9ULHayz",
-                                             img_shape=(125, 125, 3), num_classes=2)
-    quark_gluon_builder.download_and_prepare(download_dir=data_dir)
-    train_dataset, val_dataset, test_dataset = quark_gluon_builder.as_dataset(split=['train[:90%]', 'train[90%:]', 'test'], as_supervised=True, shuffle_files=True)
-    train_dataset, val_dataset, test_dataset = train_dataset.with_options(options), val_dataset.with_options(options), test_dataset.with_options(options)
-    print("Cardinalities (train, val, test):", train_dataset.cardinality().numpy(), val_dataset.cardinality().numpy(), test_dataset.cardinality().numpy())
-
-    return datasets_to_dataloaders(train_dataset, val_dataset, test_dataset, batch_size,
-                                   drop_remainder=drop_remainder)
-
-
-def get_medmnist_dataloaders(dataset: str, data_dir: str = '~/data', batch_size: int = 1, drop_remainder: bool = True):
-    """
-    Returns dataloaders for a MedMNIST dataset
-
-    Information about the dataset: https://medmnist.com/
-    """
-    raise NotImplementedError
-
-
-def get_imdb_dataloaders(data_dir: str = '~/data', batch_size: int = 1, drop_remainder: bool = True,
-                         max_vocab_size: int = 20_000, max_seq_len: int = 512):
-    """
-    Returns dataloaders for the IMDB sentiment analysis dataset (natural language processing, binary classification),
-    as well as the vocabulary and tokenizer.
-
-    Information about the dataset: https://www.tensorflow.org/datasets/catalog/imdb_reviews
-    """
-    import tensorflow_text as tf_text
-    from tensorflow_text.tools.wordpiece_vocab.bert_vocab_from_dataset import bert_vocab_from_dataset
-
-    data_dir = os.path.expanduser(data_dir)
-
-    # Load datasets
-    train_dataset, val_dataset, test_dataset = tfds.load(name='imdb_reviews',
-                                                         split=['train[:90%]', 'train[90%:]', 'test'], as_supervised=True, data_dir=data_dir, shuffle_files=True)
-    train_dataset, val_dataset, test_dataset = train_dataset.with_options(options), val_dataset.with_options(options), test_dataset.with_options(options)
-    print("Cardinalities (train, val, test):", train_dataset.cardinality().numpy(), val_dataset.cardinality().numpy(), test_dataset.cardinality().numpy())
-
-    # Build vocabulary and tokenizer
-    bert_tokenizer_params = dict(lower_case=True)
-    vocab = bert_vocab_from_dataset(
-        train_dataset.batch(10_000).prefetch(tf.data.AUTOTUNE).map(lambda x, _: x),
-        vocab_size=max_vocab_size,
-        reserved_tokens=["[PAD]", "[UNK]", "[START]", "[END]"],
-        bert_tokenizer_params=bert_tokenizer_params
-    )
-    vocab_lookup_table = tf.lookup.StaticVocabularyTable(
-        num_oov_buckets=1,
-        initializer=tf.lookup.KeyValueTensorInitializer(keys=vocab,
-                                                        values=tf.range(len(vocab), dtype=tf.int64))  # setting tf.int32 here causes an error
-    )
-    tokenizer = tf_text.BertTokenizer(vocab_lookup_table, **bert_tokenizer_params)
-
-    def preprocess(text, label):
-        # Tokenize
-        tokens = tokenizer.tokenize(text).merge_dims(-2, -1)
-        # Cast to int32 for compatibility with JAX (note that the vocabulary size is small)
-        tokens = tf.cast(tokens, tf.int32)
-        # Pad (all sequences to the same length so that JAX jit compiles the model only once)
-        padded_inputs, _ = tf_text.pad_model_inputs(tokens, max_seq_length=max_seq_len)
-        return padded_inputs, label
-
-    return datasets_to_dataloaders(train_dataset, val_dataset, test_dataset, batch_size,
-                                   drop_remainder=drop_remainder, transform=preprocess), vocab, tokenizer
+    return (torch_to_numpy_dataloader(train_dataloader),
+            torch_to_numpy_dataloader(val_dataloader),
+            torch_to_numpy_dataloader(test_dataloader)), tokenizer

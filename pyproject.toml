@@ -9,7 +9,7 @@ readme = "README.md"
 python = ">=3.11,<3.12"
 scikit-learn = "^1.5.0"
 tensorcircuit = "^0.11.0"
-jax = "0.4.13"
+jax = {version = "0.4.13", extras = ["cuda12"]}
 flax = "^0.7.1"
 optax = "^0.1.7"
 ipykernel = "^6.25.0"
@@ -25,6 +25,9 @@ qiskit = "^1.4.2"
 pylatexenc = "^2.10"
 tensorflow-text = "^2.14.0"
 ray = {extras = ["tune"], version = "^2.43.0"}
+datasets = "^4.0.0"
+torch = "^2.8.0"
+transformers = "^4.56.0"
 
 
 [[tool.poetry.source]]
