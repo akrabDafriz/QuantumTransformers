@@ -4,7 +4,7 @@ from tensorflow_text import WordpieceTokenizer
 
 # Imports for MLM data handling
 from datasets import load_dataset
-from transformers import AutoTokenizer, DataCollatorForLanguageModeling
+from transformers import AutoTokenizer, DataCollatorForLanguageModeling # This library is provided by Hugging Face
 import torch
 
 
@@ -115,6 +115,7 @@ def get_mlm_dataloaders(batch_size, dataset_name='Helsinki-NLP/opus_books', data
 
     # Data collator will take care of creating MLM inputs and labels
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm_probability=mlm_probability)
+    # This datacollator will dynamically mask tokens in the input_ids and set the labels accordingly.
 
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=data_collator)
     val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, collate_fn=data_collator)
