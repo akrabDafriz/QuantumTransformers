@@ -10,23 +10,29 @@ from tqdm import tqdm
 # Helper function for MLM cross-entropy loss
 def cross_entropy_loss(logits, labels, num_classes):
     """
-    Calculates cross-entropy loss, ignoring entries where the label is -100.
+    Calculates cross-entropy loss for MLM, handling -100 labels without boolean indexing
     """
-    # Reshape for per-token loss calculation
     logits_flat = logits.reshape(-1, num_classes)
     labels_flat = labels.reshape(-1)
     
-    # Create a mask to ignore the special -100 label
-    mask = labels_flat != -100
+    # The difference between cross entropy loss for classification and MLM is that in MLM, some labels are -100 (ignore index).
+    # We need to ignore these positions in the loss calculation. The rest positions should contribute to the loss.
+    # We can do this by creating a mask where labels are not -100, and then using this mask to weight the loss.
     
-    # Use optax's efficient implementation
-    # It handles one-hot encoding and softmax internally
-    loss = optax.softmax_cross_entropy_with_integer_labels(
-        logits=logits_flat[mask],
-        labels=labels_flat[mask]
+    # Instead of boolean indexing, use weights
+    weights = jnp.where(labels_flat != -100, 1.0, 0.0)
+    
+    # Calculate loss for all positions
+    losses = optax.softmax_cross_entropy_with_integer_labels(
+        logits=logits_flat,
+        labels=jnp.where(labels_flat != -100, labels_flat, 0)  # Replace -100 with 0
     )
     
-    return loss.mean()
+    # Apply weights to mask out the -100 positions
+    losses = losses * weights
+    
+    # Calculate mean over non-masked positions
+    return jnp.sum(losses) / (jnp.sum(weights) + 1e-8)  # Add small epsilon to prevent division by zero
 
 def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader, num_epochs,
                        task='classification'):
