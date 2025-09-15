@@ -82,6 +82,7 @@ def get_mlm_dataloaders(batch_size, dataset_name='Helsinki-NLP/opus_books', data
         'test': train_test_split['test'].map(tokenize_function, batched=True, remove_columns=["id", "translation"])
     }
 
+    # Function to group texts into chunks of block_size so that we can train the model on fixed-length sequences instead of padding each individual example to block_size
     def group_texts(examples):
         # Concatenate all texts.
         concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
@@ -121,20 +122,23 @@ def get_mlm_dataloaders(batch_size, dataset_name='Helsinki-NLP/opus_books', data
     val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, collate_fn=data_collator)
     test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, collate_fn=data_collator)
 
-    # Convert PyTorch dataloaders to something that yields numpy arrays
-    def torch_to_numpy_dataloader(dataloader):
-        for batch in dataloader:
-            # The collator returns a dict of torch tensors.
-            # We need to yield `(inputs, labels)`.
-            # For MLM, the `labels` are the input_ids with non-masked tokens set to -100.
-            # The model input should be the `input_ids` from the batch.
-            yield (batch['input_ids'].numpy(), batch['labels'].numpy())
+    # Convert PyTorch dataloaders to callables that create fresh generators
+    def create_numpy_dataloader(dataloader):
+        def generator():
+            for batch in dataloader:
+                # The collator returns a dict of torch tensors.
+                # We need to yield `(inputs, labels)`.
+                # For MLM, the `labels` are the input_ids with non-masked tokens set to -100.
+                # The model input should be the `input_ids` from the batch.
+                yield (batch['input_ids'].numpy(), batch['labels'].numpy())
+        return generator
             
     # After finding out that the Transformer model expects jnp arrays, we might want to convert the torch tensors to jnp arrays here instead of numpy arrays.
     # However, the dataloader itself yields torch tensors, so we need to convert them to numpy arrays first. Then we can convert them to jnp arrays in the training loop.
     # Alternatively, we could write a custom dataloader that yields jnp arrays directly, but that might be more complex.
     # For now, we will keep it as numpy arrays and convert to jnp arrays in the training loop.
-
-    return (torch_to_numpy_dataloader(train_dataloader),
-            torch_to_numpy_dataloader(val_dataloader),
-            torch_to_numpy_dataloader(test_dataloader)), tokenizer
+    
+    # Return callables that create fresh generators each time
+    return (create_numpy_dataloader(train_dataloader),
+            create_numpy_dataloader(val_dataloader),
+            create_numpy_dataloader(test_dataloader)), tokenizer

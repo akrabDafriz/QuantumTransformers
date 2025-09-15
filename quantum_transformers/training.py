@@ -41,8 +41,8 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
     key = jax.random.PRNGKey(0)
     key, dropout_key = jax.random.split(key)
     
-    # The dataloader yields a tuple (inputs, labels). We need the first element for initialization.
-    init_batch = next(iter(train_dataloader))[0]
+    # Create a fresh generator and get the first batch for initialization
+    init_batch = next(iter(train_dataloader()))[0]
     params = model.init({'params': key, 'dropout': dropout_key}, init_batch, train=False)['params']
 
     print(f"Number of parameters = {sum(p.size for p in jax.tree_util.tree_leaves(params))}")
@@ -98,32 +98,36 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
     for epoch in range(num_epochs):
         # --- TRAINING ---
         total_loss = 0
-        pbar = tqdm(train_dataloader, desc=f"Epoch {epoch + 1}/{num_epochs}")
+        num_batches = 0
+        pbar = tqdm(train_dataloader(), desc=f"Epoch {epoch + 1}/{num_epochs}")
         for batch in pbar:
             key, dropout_key = jax.random.split(key)
             state, loss = train_step(state, batch, dropout_key)
             total_loss += loss
+            num_batches += 1
             
             if task == 'classification':
                  pbar.set_postfix(Loss=f"{loss:.4f}")
             elif task == 'mlm':
-                ppl = jnp.exp(loss)
+                ppl = jnp.exp(loss) # Perplexity is exp of loss. It is not the exp of avg loss over epoch, but exp of loss at each step. It represents how well the model predicts the masked tokens at this step. The smaller the loss, the better the prediction, hence lower perplexity. A good perplexity is usually between 20-50 for MLM tasks.
                 pbar.set_postfix(Loss=f"{loss:.4f}", PPL=f"{ppl:.2f}")
 
-        avg_train_loss = total_loss / len(train_dataloader)
+        avg_train_loss = total_loss / num_batches
         
         # --- VALIDATION ---
         total_val_loss = 0
+        num_val_batches = 0
         all_preds, all_labels = [], []
-        pbar_val = tqdm(val_dataloader, desc="Validation", leave=False)
+        pbar_val = tqdm(val_dataloader(), desc="Validation", leave=False)
         for batch in pbar_val:
             loss, preds, labels = eval_step(state, batch)
             total_val_loss += loss
+            num_val_batches += 1
             if task == 'classification':
                 all_preds.append(jax.nn.softmax(preds, axis=-1))
                 all_labels.append(labels)
 
-        avg_val_loss = total_val_loss / len(val_dataloader)
+        avg_val_loss = total_val_loss / num_val_batches
         
         # --- METRIC CALCULATION & EARLY STOPPING ---
         if task == 'classification':
@@ -153,16 +157,18 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
     
     # --- TESTING ---
     total_test_loss = 0
+    num_test_batches = 0
     all_preds, all_labels = [], []
-    pbar_test = tqdm(test_dataloader, desc="Testing")
+    pbar_test = tqdm(test_dataloader(), desc="Testing")
     for batch in pbar_test:
         loss, preds, labels = eval_step(state, batch)
         total_test_loss += loss
+        num_test_batches += 1
         if task == 'classification':
             all_preds.append(jax.nn.softmax(preds, axis=-1))
             all_labels.append(labels)
 
-    avg_test_loss = total_test_loss / len(test_dataloader)
+    avg_test_loss = total_test_loss / num_test_batches
     
     if task == 'classification':
         test_preds = jnp.concatenate([p[:, 1] for p in all_preds])
