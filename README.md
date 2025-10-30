@@ -1,5 +1,12 @@
 # Quantum Transformers
 
+Quantum Transformers are used for wide range of fields including binary classification (need reference) and computer vision (need reference). However, the training method of Masked Language Model (MLM) is underexplored. Word prediction using MLM was the method used in the original paper of BERT (need reference), introducing a way to pretrain the model bidirectionally, fusing the the left and the right context of a token, instead of left-to-right unidirectional pre-training. Word prediction is applied to test the bidrectional language understanding of the model, instead of just binary sentiment classification. Real-world implementation could then exploit this for inference, creating usecases such as chatbots and code continuing software. 
+
+This project explores how the Quantum Transformer (need reference) can be implemented for word prediction.
+
+===
+
+
 This project explores how the [Transformer](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model)) architecture can be executed on quantum computers. In particular, the focus is on the adaptation of the [Vision Transformer](https://en.wikipedia.org/wiki/Vision_transformer) for the analysis of high-energy physics data.
 
 The relevance of the work is accentuated by the upcoming start of operation of the [High Luminosity Large Hadron Collider (HL-LHC)](https://hilumilhc.web.cern.ch/content/hl-lhc-project) at the end of this decade. The program will produce enormous quantities of data, which in turn will require vast computing resources. A promising approach for dealing with this huge amount of data could be the application of quantum machine learning (QML), which could reduce the time complexity of classical algorithms by running on quantum computers and obtain better accuracies.
