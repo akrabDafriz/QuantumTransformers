@@ -64,7 +64,7 @@ class MultiHeadSelfAttention(nn.Module):
         attn = nn.Dropout(rate=self.dropout)(attn, deterministic=deterministic)
 
         # Compute output
-        values = attn @ v
+        values = attn @ v # @ is the matrix multiplication operator in Python.
         # values.shape = (batch_size, num_heads, seq_len, head_dim)
         values = values.swapaxes(1, 2).reshape(batch_size, seq_len, hidden_size) 
         # values.shape = (batch_size, seq_len, hidden_size)
@@ -90,7 +90,7 @@ class FeedForward(nn.Module):
         x = nn.Dense(features=self.mlp_hidden_size)(x) # x.shape = (batch_size, seq_len, mlp_hidden_size)
         if self.quantum_circuit is not None:
             x = QuantumLayer(num_qubits=self.mlp_hidden_size, w_shape=self.quantum_w_shape, circuit=self.quantum_circuit)(x) # x.shape = (batch_size, seq_len, mlp_hidden_size). The quantum layer processes the input x using a quantum circuit with mlp_hidden_size qubits. This allows the quantum layer to effectively capture complex relationships and patterns in the input data, leveraging the capabilities of quantum computing.
-        x = nn.Dropout(rate=self.dropout)(x, deterministic=deterministic)
+        x = nn.Dropout(rate=self.dropout)(x, deterministic=deterministic) #  This part applies to both classical and quantum cases. The nn.Dropout layer randomly sets a fraction of the input units to zero during training, which helps prevent overfitting and improves the model's generalization. The deterministic parameter ensures that dropout is only applied during training and not during evaluation or inference.
         x = nn.gelu(x)
         x = nn.Dense(features=self.hidden_size)(x)
         return x

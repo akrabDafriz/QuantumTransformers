@@ -51,7 +51,7 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
     num_output_classes = model.num_tokens if task == 'mlm' else 2
 
     optimizer = optax.adam(learning_rate=3e-5)
-    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
+    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer) # This holds the model parameters and optimizer state
     
     # JIT compile the train and eval steps for performance
     @jax.jit
@@ -61,7 +61,7 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
         def loss_fn(params):
             # Pass the input tensor directly to the model
             logits = state.apply_fn({'params': params}, inputs, train=True,
-                                    rngs={'dropout': dropout_key})
+                                    rngs={'dropout': dropout_key}) # apply_fn is the model's forward function. It takes params and inputs, and returns logits. Logits here is the output of the model before softmax.
             
             if task == 'classification':
                 loss = optax.sigmoid_binary_cross_entropy(logits, onehot(labels, num_output_classes)).mean()
@@ -73,7 +73,7 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
         
         grad_fn = jax.value_and_grad(loss_fn)
         loss, grads = grad_fn(state.params)
-        state = state.apply_gradients(grads=grads)
+        state = state.apply_gradients(grads=grads) # This updates the model parameters using the gradients and optimizer. Gradients basically tell us how to change the parameters to reduce the loss by giving the direction and magnitude of change needed for each parameter.
         return state, loss
 
     @jax.jit
@@ -99,7 +99,7 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
         # --- TRAINING ---
         total_loss = 0
         num_batches = 0
-        pbar = tqdm(train_dataloader(), desc=f"Epoch {epoch + 1}/{num_epochs}")
+        pbar = tqdm(train_dataloader(), desc=f"Epoch {epoch + 1}/{num_epochs}") # This will create a fresh generator each epoch. A generator is an iterable that yields batches.
         for batch in pbar:
             key, dropout_key = jax.random.split(key)
             state, loss = train_step(state, batch, dropout_key)
@@ -146,9 +146,9 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
             print(f"Epoch {epoch + 1}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}, Val PPL = {val_ppl:.2f}")
             
             if avg_val_loss < best_val_metric:
-                best_val_metric = avg_val_loss
+                best_val_metric = avg_val_loss # Update best metric. This is lower-is-better
                 best_epoch = epoch + 1
-                # In a real scenario, you would save the best model parameters here
+                # In a real scenario, you would save the best model parameters here. You can do it by saving `state.params`. "Real scenario" means when you have a lot of compute and time, and you want to avoid overfitting by keeping the best model on validation set.
 
     total_training_time = time.time() - start_time
     metric_name = "best validation AUC" if task == 'classification' else "best validation loss"
