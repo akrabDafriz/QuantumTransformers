@@ -42,7 +42,10 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
     key, dropout_key = jax.random.split(key)
     
     # Create a fresh generator and get the first batch for initialization
-    init_batch = next(iter(train_dataloader()))[0]
+    # We need the dataloader to be callable to get a fresh iterator
+    train_loader_iter = train_dataloader()
+    init_batch = next(iter(train_loader_iter))[0]
+    
     params = model.init({'params': key, 'dropout': dropout_key}, init_batch, train=False)['params']
 
     print(f"Number of parameters = {sum(p.size for p in jax.tree_util.tree_leaves(params))}")
@@ -51,7 +54,7 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
     num_output_classes = model.num_tokens if task == 'mlm' else 2
 
     optimizer = optax.adam(learning_rate=3e-5)
-    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer) # This holds the model parameters and optimizer state
+    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
     
     # JIT compile the train and eval steps for performance
     @jax.jit
@@ -61,7 +64,7 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
         def loss_fn(params):
             # Pass the input tensor directly to the model
             logits = state.apply_fn({'params': params}, inputs, train=True,
-                                    rngs={'dropout': dropout_key}) # apply_fn is the model's forward function. It takes params and inputs, and returns logits. Logits here is the output of the model before softmax.
+                                    rngs={'dropout': dropout_key})
             
             if task == 'classification':
                 loss = optax.sigmoid_binary_cross_entropy(logits, onehot(labels, num_output_classes)).mean()
@@ -73,7 +76,7 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
         
         grad_fn = jax.value_and_grad(loss_fn)
         loss, grads = grad_fn(state.params)
-        state = state.apply_gradients(grads=grads) # This updates the model parameters using the gradients and optimizer. Gradients basically tell us how to change the parameters to reduce the loss by giving the direction and magnitude of change needed for each parameter.
+        state = state.apply_gradients(grads=grads)
         return state, loss
 
     @jax.jit
@@ -93,13 +96,15 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
 
     best_val_metric = -1.0 if task == 'classification' else float('inf')
     best_epoch = 0
+    best_state = state  # <<< --- ADD: Initialize best_state
     start_time = time.time()
     
     for epoch in range(num_epochs):
         # --- TRAINING ---
         total_loss = 0
         num_batches = 0
-        pbar = tqdm(train_dataloader(), desc=f"Epoch {epoch + 1}/{num_epochs}") # This will create a fresh generator each epoch. A generator is an iterable that yields batches.
+        # Re-create the generator for each epoch
+        pbar = tqdm(train_dataloader(), desc=f"Epoch {epoch + 1}/{num_epochs}")
         for batch in pbar:
             key, dropout_key = jax.random.split(key)
             state, loss = train_step(state, batch, dropout_key)
@@ -109,7 +114,7 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
             if task == 'classification':
                  pbar.set_postfix(Loss=f"{loss:.4f}")
             elif task == 'mlm':
-                ppl = jnp.exp(loss) # Perplexity is exp of loss. It is not the exp of avg loss over epoch, but exp of loss at each step. It represents how well the model predicts the masked tokens at this step. The smaller the loss, the better the prediction, hence lower perplexity. A good perplexity is usually between 20-50 for MLM tasks.
+                ppl = jnp.exp(loss)
                 pbar.set_postfix(Loss=f"{loss:.4f}", PPL=f"{ppl:.2f}")
 
         avg_train_loss = total_loss / num_batches
@@ -139,16 +144,16 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
             if val_auc > best_val_metric:
                 best_val_metric = val_auc
                 best_epoch = epoch + 1
-                # In a real scenario, you would save the best model parameters here
+                best_state = state  # <<< --- ADD: Update best_state
         
         elif task == 'mlm':
             val_ppl = jnp.exp(avg_val_loss)
             print(f"Epoch {epoch + 1}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}, Val PPL = {val_ppl:.2f}")
             
             if avg_val_loss < best_val_metric:
-                best_val_metric = avg_val_loss # Update best metric. This is lower-is-better
+                best_val_metric = avg_val_loss
                 best_epoch = epoch + 1
-                # In a real scenario, you would save the best model parameters here. You can do it by saving `state.params`. "Real scenario" means when you have a lot of compute and time, and you want to avoid overfitting by keeping the best model on validation set.
+                best_state = state  # <<< --- ADD: Update best_state
 
     total_training_time = time.time() - start_time
     metric_name = "best validation AUC" if task == 'classification' else "best validation loss"
@@ -156,12 +161,14 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
     print(f"Total training time = {total_training_time:.2f}s, {metric_name} = {metric_value} at epoch {best_epoch}")
     
     # --- TESTING ---
+    # Use the best_state for testing
     total_test_loss = 0
     num_test_batches = 0
     all_preds, all_labels = [], []
     pbar_test = tqdm(test_dataloader(), desc="Testing")
     for batch in pbar_test:
-        loss, preds, labels = eval_step(state, batch)
+        # <<< --- CHANGE: Use best_state, not final state --- >>>
+        loss, preds, labels = eval_step(best_state, batch)
         total_test_loss += loss
         num_test_batches += 1
         if task == 'classification':
@@ -175,8 +182,10 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
         test_labels = jnp.concatenate(all_labels)
         test_auc = roc_auc_score(test_labels, test_preds)
         print(f"Test Loss = {avg_test_loss:.4f}, Test AUC = {test_auc*100:.2f}%")
-        return avg_test_loss, test_auc, test_preds, test_labels
+        # <<< --- CHANGE: Return best_state --- >>>
+        return (avg_test_loss, test_auc, test_preds, test_labels), best_state
     elif task == 'mlm':
         test_ppl = jnp.exp(avg_test_loss)
         print(f"Test Loss = {avg_test_loss:.4f}, Test PPL = {test_ppl:.2f}")
-        return avg_test_loss, test_ppl
+        # <<< --- CHANGE: Return best_state --- >>>
+        return (avg_test_loss, test_ppl), best_state
