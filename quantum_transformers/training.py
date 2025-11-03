@@ -25,7 +25,7 @@ def cross_entropy_loss(logits, labels, num_classes):
     # Calculate loss for all positions
     losses = optax.softmax_cross_entropy_with_integer_labels(
         logits=logits_flat,
-        labels=jnp.where(labels_flat != -100, labels_flat, 0)  # Replace -100 with 0
+        labels=jnp.where(labels_flat != -100, labels_flat, 0)  # Replace -100 with 0 to avoid invalid labels
     )
     
     # Apply weights to mask out the -100 positions
@@ -189,3 +189,4 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
         print(f"Test Loss = {avg_test_loss:.4f}, Test PPL = {test_ppl:.2f}")
         # <<< --- CHANGE: Return best_state --- >>>
         return (avg_test_loss, test_ppl), best_state
+
