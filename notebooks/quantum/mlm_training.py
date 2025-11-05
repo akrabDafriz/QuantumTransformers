@@ -81,7 +81,7 @@ classical_model = Transformer(
     val_dataloader=val_dataloader_gen,
     test_dataloader=test_dataloader_gen,
     task='mlm',
-    num_epochs=150  # Change this for different training epoch numbers
+    num_epochs=1  # Change this for different training epoch numbers
 )
 
 print("\n--- Classical Transformer Training Finished ---")
@@ -112,7 +112,7 @@ quantum_model = Transformer(
     val_dataloader=val_dataloader_gen,
     test_dataloader=test_dataloader_gen,
     task='mlm',
-    num_epochs=150  # Change this for different training epoch numbers
+    num_epochs=1  # Change this for different training epoch numbers
 )
 
 print("\n--- Quantum Transformer Training Finished ---")
