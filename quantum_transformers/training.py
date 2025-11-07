@@ -189,4 +189,3 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
         print(f"Test Loss = {avg_test_loss:.4f}, Test PPL = {test_ppl:.2f}")
         # <<< --- CHANGE: Return best_state --- >>>
         return (avg_test_loss, test_ppl), best_state
-

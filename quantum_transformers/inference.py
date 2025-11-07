@@ -4,7 +4,7 @@ from flax import serialization
 from flax.training import train_state
 import pickle
 import os
-from functools import partial
+from functools import partial  # <<< --- ADD THIS IMPORT
 
 from .transformers import Transformer
 
@@ -89,7 +89,7 @@ def predict_masked_token(text: str, model: Transformer, params, tokenizer, top_k
     # 2. Find the position of the [MASK] token
     try:
         mask_token_id = tokenizer.mask_token_id
-        mask_position = jnp.where(token_ids[0] == mask_token_id)[0][0] # This is the position of the [MASK] token
+        mask_position = jnp.where(token_ids[0] == mask_token_id)[0][0]
     except (AttributeError, IndexError):
         print(f"Error: Could not find [MASK] token (ID: {tokenizer.mask_token_id}) in input text.")
         print(f"Tokenized IDs: {token_ids[0]}")
