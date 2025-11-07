@@ -12,7 +12,7 @@ from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 # --- THIS IS THE MAIN FUNCTION CALLED BY THE TRAINING SCRIPT ---
 def get_mlm_dataloaders(batch_size, dataset_name='roneneldan/TinyStories',
                         model_checkpoint='bert-base-uncased', block_size=128, mlm_probability=0.15,
-                        data_dir=None):
+                        data_dir=None, tokenizer=None): 
     """
     Downloads and prepares a dataset for Masked Language Modeling using an efficient chunking strategy.
     Uses dataset slicing to avoid OOM errors.
@@ -21,41 +21,68 @@ def get_mlm_dataloaders(batch_size, dataset_name='roneneldan/TinyStories',
     print("Loading dataset slices from Hugging Face (to save RAM)...")
     # Load slices of the dataset to prevent OOM errors
     # We use a combined slice for programmatic splitting
-    raw_datasets = load_dataset(
+    # We take 200k for train, 10k for val, 10k for test
+    raw_datasets_train = load_dataset(
         dataset_name, 
-        split='train[:200000]', # Load one 200k chunk
+        split='train[:200000]', # Load 200k chunk for training
         cache_dir=data_dir
     )
+    raw_datasets_val = load_dataset(
+        dataset_name,
+        split='train[200000:210000]', # Load 10k chunk for validation
+        cache_dir=data_dir
+    )
+    raw_datasets_test = load_dataset(
+        dataset_name,
+        split='train[210000:220000]', # Load 10k chunk for testing
+        cache_dir=data_dir
+    )
+    
     print("Dataset slices loaded.")
 
     # Load tokenizer
     print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(model_checkpoint, use_fast=False)
-    
+    # --- MODIFICATION: Use the passed-in tokenizer if it exists ---
+    if tokenizer is not None:
+        print("Using tokenizer provided from training script.")
+        print(tokenizer)
+    else:
+        # Fallback to AutoTokenizer if no tokenizer is passed
+        print(f"Loading tokenizer from model checkpoint: {model_checkpoint}")
+        tokenizer = AutoTokenizer.from_pretrained(model_checkpoint, use_fast=True)
+    # --- END MODIFICATION ---
+
+
     def tokenize_function(examples):
-        # Tokenize the 'text' column
-        return tokenizer(examples['text'])
+        """
+        Tokenizes text. 
+        --- FIX: REMOVED padding and truncation. ---
+        The group_texts function needs raw, un-padded token lists.
+        """
+        print("Tokenizing batch...")
+        # Print the first text to debug
+        if examples and 'text' in examples and examples['text']:
+             print(f"First text in batch: {examples['text'][0][:50]}...")
+        
+        # --- THIS IS THE FIX ---
+        # Do not pad or truncate here. Just tokenize.
+        # The 'group_texts' function will handle the chunking.
+        return tokenizer(examples["text"])
+        # --- END FIX ---
 
-    print("Splitting dataset...")
-    # Programmatically split the 200k chunk into train/val/test
-    # 90% train (180k), 10% test (20k)
-    train_test_split = raw_datasets.train_test_split(test_size=0.1, seed=42)
-    # Of the 180k train, 90% train (162k), 10% validation (18k)
-    train_val_split = train_test_split['train'].train_test_split(test_size=0.1, seed=42)
-
+    print("\nTokenizing datasets...")
+    # We map the tokenize_function to our dataset slices
     temp_tokenized_datasets = {
-        'train': train_val_split['train'].map(
-            tokenize_function, batched=True, remove_columns=["text"]),
-        'validation': train_val_split['test'].map(
-            tokenize_function, batched=True, remove_columns=["text"]),
-        'test': train_test_split['test'].map(
-            tokenize_function, batched=True, remove_columns=["text"])
+        'train': raw_datasets_train.map(tokenize_function, batched=True, remove_columns=["text"]),
+        'validation': raw_datasets_val.map(tokenize_function, batched=True, remove_columns=["text"]),
+        'test': raw_datasets_test.map(tokenize_function, batched=True, remove_columns=["text"])
     }
-    
-    print(f"Train examples: {len(temp_tokenized_datasets['train'])}")
-    print(f"Validation examples: {len(temp_tokenized_datasets['validation'])}")
-    print(f"Test examples: {len(temp_tokenized_datasets['test'])}")
+    print("Tokenization complete.")
 
+    # --- DEBUG: Print an example from the *tokenized* (but not grouped) set ---
+    print("\nExample from tokenized (pre-grouping) test split:")
+    print(temp_tokenized_datasets['test'][0])
+    # --- END DEBUG ---
 
     # Function to group texts into chunks of block_size
     def group_texts(examples):
@@ -70,23 +97,44 @@ def get_mlm_dataloaders(batch_size, dataset_name='roneneldan/TinyStories',
             k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
             for k, t in concatenated_examples.items()
         }
-        
-        # --- THIS IS THE CRITICAL LINE THAT FIXES THE PPL=1.0 BUG ---
-        # The data collator EXPECTS this. It will internally create the
-        # correct -100 labels based on the masking it performs.
         result["labels"] = result["input_ids"].copy()
-        # --- END CRITICAL LINE ---
-        
         return result
 
-    print("Grouping texts into blocks...")
+    print("\nGrouping texts into blocks...")
+    # Get column names to remove *after* tokenization
+    column_names = list(temp_tokenized_datasets['train'].features)
+    print(f"Column names before grouping:\n{column_names}")
+    
     tokenized_datasets = {
-        'train': temp_tokenized_datasets['train'].map(group_texts, batched=True),
-        'validation': temp_tokenized_datasets['validation'].map(group_texts, batched=True),
-        'test': temp_tokenized_datasets['test'].map(group_texts, batched=True)
+        'train': temp_tokenized_datasets['train'].map(
+            group_texts, 
+            batched=True,
+            remove_columns=column_names # Remove old columns
+        ),
+        'validation': temp_tokenized_datasets['validation'].map(
+            group_texts, 
+            batched=True,
+            remove_columns=column_names # Remove old columns
+        ),
+        'test': temp_tokenized_datasets['test'].map(
+            group_texts, 
+            batched=True,
+            remove_columns=column_names # Remove old columns
+        )
     }
+    print("Text grouping complete.")
+    
+    # --- DEBUG: Print column names *after* grouping ---
+    print(f"Column names after grouping:\n{list(tokenized_datasets['train'].features)}")
+    # --- END DEBUG ---
+    
+    # --- DEBUG: Print an example from the *grouped* set ---
+    print("\nExample from grouped train split:")
+    print(tokenized_datasets['train'][0])
+    # --- END DEBUG ---
 
     # Use PyTorch dataloaders for easier integration with DataCollator
+    print("\nSetting format to 'torch' for dataloaders...")
     tokenized_datasets['train'].set_format("torch")
     tokenized_datasets['validation'].set_format("torch")
     tokenized_datasets['test'].set_format("torch")
@@ -95,41 +143,42 @@ def get_mlm_dataloaders(batch_size, dataset_name='roneneldan/TinyStories',
     val_dataset = tokenized_datasets["validation"]
     test_dataset = tokenized_datasets["test"]
 
+    print(f"Tokenizer vocab size: {tokenizer.vocab_size}")
+    print(f"train split size: {len(train_dataset)}")
+    print(f"validation split size: {len(val_dataset)}")
+    print(f"test split size: {len(test_dataset)}")
+
     # Data collator will take care of creating MLM inputs and labels
     print("Initializing Data Collator...")
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer, 
-        mlm_probability=mlm_probability
-    )
+    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm_probability=mlm_probability)
 
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, collate_fn=data_collator
-    )
-    val_dataloader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=batch_size, collate_fn=data_collator
-    )
-    test_dataloader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=batch_size, collate_fn=data_collator
-    )
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=data_collator)
+    val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, collate_fn=data_collator)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, collate_fn=data_collator)
+    print("\nData loaders created successfully.")
 
     # Convert PyTorch dataloaders to callables that create fresh generators
     def create_numpy_dataloader(dataloader):
         def generator():
             for batch in dataloader:
-                # The collator returns a dict of torch tensors.
-                # 'input_ids' are now MASKED
-                # 'labels' are the original IDs, with -100 for non-masked tokens
                 yield (batch['input_ids'].numpy(), batch['labels'].numpy())
         return generator
             
-    # Return callables that create fresh generators each time
+    # --- DEBUG: Print a batch to check ---
+    print("\nExample batch from train dataloader:")
+    example_batch = next(iter(train_dataloader))
+    print("Input IDs:")
+    print(example_batch['input_ids'])
+    print("Labels:")
+    print(example_batch['labels'])
+    # --- END DEBUG ---
+
     return (create_numpy_dataloader(train_dataloader),
             create_numpy_dataloader(val_dataloader),
             create_numpy_dataloader(test_dataloader)), tokenizer
 
 
 # --- THIS IS THE OLD IMDB FUNCTION, WE LEAVE IT HERE ---
-# Note: It will not be called by mlm_training.py
 import tensorflow_datasets as tfds
 from tensorflow_text import WordpieceTokenizer
 
