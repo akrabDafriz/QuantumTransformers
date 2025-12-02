@@ -1,262 +1,160 @@
-# --- 1. FRAMEWORK SETUP (MUST BE FIRST) ---
-import tensorflow as tf
-# Ensure TF does not see GPU and grab all GPU memory.
-# This MUST run before JAX is imported.
-tf.config.set_visible_devices([], device_type='GPU')
-# --- END FRAMEWORK SETUP ---
-
+import os
+import jax.numpy as jnp
+from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+from torch.utils.data import DataLoader, Dataset
 import torch
-from datasets import load_dataset
-from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 
-# --- THIS IS THE MAIN FUNCTION CALLED BY THE TRAINING SCRIPT ---
-def get_mlm_dataloaders(batch_size, dataset_name='roneneldan/TinyStories',
-                        model_checkpoint='bert-base-uncased', block_size=128, mlm_probability=0.15,
-                        data_dir=None, tokenizer=None): 
+class TextClassificationDataset(Dataset):
+    def __init__(self, texts, labels, tokenizer, max_len):
+        self.texts = texts
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+
+    def __len__(self):
+        return len(self.texts)
+
+    def __getitem__(self, idx):
+        text = self.texts[idx]
+        label = self.labels[idx]
+
+        # Encode text
+        encoding = self.tokenizer.encode(text)
+        ids = encoding.ids
+
+        # Pad or truncate
+        if len(ids) > self.max_len:
+            ids = ids[:self.max_len]
+        else:
+            ids = ids + [0] * (self.max_len - len(ids))
+
+        return jnp.array(ids), jnp.array(label)
+
+
+def train_tokenizer(texts, vocab_size=20000):
+    """Trains a BPE tokenizer on the provided texts."""
+    tokenizer = Tokenizer(models.BPE())
+    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    trainer = trainers.BpeTrainer(vocab_size=vocab_size, special_tokens=["[PAD]", "[UNK]"])
+    tokenizer.train_from_iterator(texts, trainer=trainer)
+    return tokenizer
+
+
+def load_mc_rp_data(file_path):
     """
-    Downloads and prepares a dataset for Masked Language Modeling using an efficient chunking strategy.
-    Uses dataset slicing to avoid OOM errors.
+    Parses MC (Meaning Classification) and RP (Relative Pronouns) datasets.
+    Format: "1 organization_N that_RPRON fleet_N destroy_V" (Label first)
     """
-    
-    print("Loading dataset slices from Hugging Face (to save RAM)...")
-    # Load slices of the dataset to prevent OOM errors
-    # We use a combined slice for programmatic splitting
-    raw_datasets = load_dataset(
-        dataset_name, 
-        split='train[:200000]', # Load one 200k chunk
-        cache_dir=data_dir
-    )
-    val_dataset = load_dataset(dataset_name, split='validation', cache_dir=data_dir)
-
-    print("Dataset slices loaded.")
-
-    # --- Corrected code for datasets.py ---
-
-    # Load tokenizer
-    print("Loading tokenizer...")
-    # --- MODIFICATION: Use the passed-in tokenizer if it exists! ---
-    if tokenizer is None:
-        print(f"No tokenizer provided, loading from checkpoint: {model_checkpoint}")
-        tokenizer = AutoTokenizer.from_pretrained(model_checkpoint, use_fast=True)
-    else:
-        print("Using tokenizer provided from training script.")
-        print(tokenizer)
-    # --- END MODIFICATION ---
-    
-    def tokenize_function(examples):
-        """
-        Tokenizes text. 
-        --- FIX: REMOVED padding and truncation. ---
-        The group_texts function needs raw, un-padded token lists.
-        """
-        print("Tokenizing batch...")
-        # Print the first text to debug
-        if examples and 'text' in examples and examples['text']:
-             print(f"First text in batch: {examples['text'][0][:50]}...")
-        
-        # --- THIS IS THE FIX ---
-        # Do not pad or truncate here. Just tokenize.
-        return tokenizer(examples["text"])
-
-    print("Splitting dataset...")
-    # Programmatically split the 200k chunk into train/val/test
-    # 90% train (180k), 10% test (20k)
-    train_test_split = raw_datasets.train_test_split(test_size=0.1, seed=42)
-    # Of the 180k train, 90% train (162k), 10% validation (18k)
-    # train_val_split = train_test_split['train'].train_test_split(test_size=0.1, seed=42)
-
-    # We removed `remove_columns` here, which was the correct fix.
-    temp_tokenized_datasets = {
-        'train': train_test_split['train'].map(
-            tokenize_function, batched=True),
-        'validation': val_dataset.map(
-            tokenize_function, batched=True),
-        'test': train_test_split['test'].map(
-            tokenize_function, batched=True)
-    }
-    
-    print(f"Train examples: {len(temp_tokenized_datasets['train'])}")
-    print(f"Validation examples: {len(temp_tokenized_datasets['validation'])}")
-    print(f"Test examples: {len(temp_tokenized_datasets['test'])}")
-
-    # print 3 examples from each split
-    for split in ['train', 'validation', 'test']:
-        print(f"\nExamples from {split} split:")
-        for i in range(3):
-            print(temp_tokenized_datasets[split][i])
-
-
-    # We update group_texts to ONLY concatenate the keys it knows about,
-    # and to ignore the raw "text" column.
-    def group_texts(examples):
-        # Define the keys we *know* are tokenized lists
-        keys_to_concatenate = ["input_ids", "token_type_ids", "attention_mask"]
-        
-        concatenated_examples = {}
-        
-        # Only sum the lists we care about
-        for k in keys_to_concatenate:
-            if k in examples: # Check if it exists (e.g., token_type_ids might not)
-                concatenated_examples[k] = sum(examples[k], [])
-        
-        # Use the primary key (input_ids) to get the total length
-        total_length = len(concatenated_examples["input_ids"])
-        
-        # We drop the small remainder.
-        if total_length >= block_size:
-            total_length = (total_length // block_size) * block_size
+    texts = []
+    labels = []
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) < 2:
+                continue
+            # The first token is the label (0 or 1)
+            label = int(parts[0])
+            # The rest is the sentence
+            text = " ".join(parts[1:])
             
-        # Split by chunks of block_size.
-        result = {}
-        for k, t in concatenated_examples.items():
-            # Slice the concatenated list into chunks
-            result[k] = [t[i : i + block_size] for i in range(0, total_length, block_size)]
+            labels.append(label)
+            texts.append(text)
+    return texts, labels
 
-        # This line is correct and necessary for the collator
-        result["labels"] = result["input_ids"].copy()
-        return result
 
-    print("Grouping texts into blocks...")
+def load_sentiment_data(file_path):
+    """
+    Parses IMDb, Amazon, Yelp sentiment datasets.
+    Format: "A bit predictable. \t 0" (Label last, tab or space separated)
+    """
+    texts = []
+    labels = []
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # These files usually use tab \t or 4 spaces to separate sentence and label
+            if '\t' in line:
+                parts = line.split('\t')
+                text = parts[0].strip()
+                label = int(parts[-1])
+            else:
+                # Fallback: assume the last character is the label if no tab found
+                # (Some versions of this dataset use multiple spaces)
+                parts = line.split()
+                label = int(parts[-1])
+                text = " ".join(parts[:-1])
+
+            texts.append(text)
+            labels.append(label)
+    return texts, labels
+
+
+def get_custom_classification_dataloader(file_paths: list, 
+                                         dataset_type: str = 'sentiment', 
+                                         batch_size: int = 32, 
+                                         max_seq_len: int = 64,
+                                         validation_split: float = 0.2):
+    """
+    Generic loader for the 5 datasets.
     
-    column_names = temp_tokenized_datasets['train'].column_names 
-    print(f"Column names: {column_names}")
+    Args:
+        file_paths: List of file paths to load (can be just one file).
+        dataset_type: 'sentiment' (for IMDb/Amazon/Yelp) or 'mc_rp' (for MC/RP QNLP datasets).
+        batch_size: Batch size.
+        max_seq_len: Maximum sequence length.
+        validation_split: Fraction of data to use for validation.
+    """
+    all_texts = []
+    all_labels = []
 
-    tokenized_datasets = {
-            'train': temp_tokenized_datasets['train'].map(
-            group_texts, 
-            batched=True,
-            remove_columns=column_names # <--- ADD THIS
-        ),
-        'validation': temp_tokenized_datasets['validation'].map(
-            group_texts, 
-            batched=True,
-            remove_columns=column_names # <--- ADD THIS
-        ),
-        'test': temp_tokenized_datasets['test'].map(
-            group_texts, 
-            batched=True,
-            remove_columns=column_names # <--- ADD THIS
-        )
-    }
-
-    
-    # --- END FIX ---
-    # print 3 examples from each split after grouping
-    for split in ['train', 'validation', 'test']:
-        print(f"\nGrouped examples from {split} split:")
-        for i in range(3):
-            print(tokenized_datasets[split][i])
-
-    # Print the column names of temp_tokenized_datasets
-    print("\nColumn names before grouping:")
-    for split in ['train', 'validation', 'test']:
-        print(f"{split} split: {temp_tokenized_datasets[split].column_names}")
-    
-    # print the column names of the tokenized_datasets
-    print("\nColumn names after grouping:")
-    for split in ['train', 'validation', 'test']:
-        print(f"{split} split: {tokenized_datasets[split].column_names}")
+    # 1. Load Data
+    for path in file_paths:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Dataset file not found: {path}")
         
-    # print the number of vocab size
-    print(f"\nTokenizer vocab size: {tokenizer.vocab_size}")
+        if dataset_type == 'mc_rp':
+            t, l = load_mc_rp_data(path)
+        elif dataset_type == 'sentiment':
+            t, l = load_sentiment_data(path)
+        else:
+            raise ValueError(f"Unknown dataset_type: {dataset_type}. Use 'sentiment' or 'mc_rp'.")
+        
+        all_texts.extend(t)
+        all_labels.extend(l)
+
+    print(f"Loaded {len(all_texts)} samples from {file_paths}")
+
+    # 2. Tokenize
+    # We train a fresh tokenizer on this dataset
+    tokenizer = train_tokenizer(all_texts, vocab_size=5000) # Smaller vocab for small datasets
+    print(f"Tokenizer trained. Vocab size: {tokenizer.get_vocab_size()}")
+
+    # 3. Create Splits
+    # Shuffle first
+    indices = torch.randperm(len(all_texts)).tolist()
+    split_val = int(len(all_texts) * validation_split)
     
-    # print the number of examples in each split
-    for split in ['train', 'validation', 'test']:
-        print(f"{split} split size: {len(tokenized_datasets[split])}")
+    train_indices = indices[split_val:]
+    val_indices = indices[:split_val]
 
-    # Use PyTorch dataloaders for easier integration with DataCollator
-    tokenized_datasets['train'].set_format("torch")
-    tokenized_datasets['validation'].set_format("torch")
-    tokenized_datasets['test'].set_format("torch")
-    
-    train_dataset = tokenized_datasets["train"]
-    val_dataset = tokenized_datasets["validation"]
-    test_dataset = tokenized_datasets["test"]
+    train_texts = [all_texts[i] for i in train_indices]
+    train_labels = [all_labels[i] for i in train_indices]
+    val_texts = [all_texts[i] for i in val_indices]
+    val_labels = [all_labels[i] for i in val_indices]
 
-    # Data collator will take care of creating MLM inputs and labels
-    print("Initializing Data Collator...")
-    
-    if tokenizer.mask_token_id is None:
-        raise ValueError("Tokenizer has no mask_token_id. This is fatal.")
+    # 4. Create Datasets
+    train_dataset = TextClassificationDataset(train_texts, train_labels, tokenizer, max_seq_len)
+    val_dataset = TextClassificationDataset(val_texts, val_labels, tokenizer, max_seq_len)
 
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer, 
-        mlm_probability=mlm_probability,
-        mlm=True
-    )
-    data_collator.mask_token_id = tokenizer.mask_token_id
+    def collate_fn(batch):
+        inputs = jnp.array([item[0] for item in batch])
+        targets = jnp.array([item[1] for item in batch])
+        return inputs, targets
 
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, collate_fn=data_collator
-    )
-    val_dataloader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=batch_size, collate_fn=data_collator
-    )
-    test_dataloader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=batch_size, collate_fn=data_collator
-    )
-
-    # Convert PyTorch dataloaders to callables that create fresh generators
-    def create_numpy_dataloader(dataloader):
-        def generator():
-            for batch in dataloader:
-                yield (batch['input_ids'].numpy(), batch['labels'].numpy())
-        return generator
-
-    print("\nData loaders created successfully.")
-
-    train_data = create_numpy_dataloader(train_dataloader)
-    val_data = create_numpy_dataloader(val_dataloader)
-    test_data = create_numpy_dataloader(test_dataloader)
-    
-    
-    # Example of a masked batch
-    for batch in train_dataloader:
-        print("\nExample batch from train dataloader:")
-        print("Input IDs:\n", batch['input_ids'])
-        print("Labels:\n", batch['labels'])
-        break
-    
-    # print the masking token
-    print(f"\nMasking token ID: {tokenizer.mask_token_id}, Masking token: '{tokenizer.mask_token}'")
-
-    # Return callables that create fresh generators each time
-    return (create_numpy_dataloader(train_dataloader),
-            create_numpy_dataloader(val_dataloader),
-            create_numpy_dataloader(test_dataloader)), tokenizer
-
-
-# --- THIS IS THE OLD IMDB FUNCTION, WE LEAVE IT HERE ---
-import tensorflow_datasets as tfds
-from tensorflow_text import WordpieceTokenizer
-
-def get_imdb_dataloaders(batch_size, data_dir, max_vocab_size=20_000, max_seq_len=512):
-    (ds_train, ds_val, ds_test), ds_info = tfds.load('imdb_reviews', split=['train[:90%]', 'train[90%:]', 'test'],
-                                                    data_dir=data_dir, as_supervised=True, with_info=True)
-    
-    print(f"Cardinalities (train, val, test): {ds_train.cardinality().numpy()} {ds_val.cardinality().numpy()} {ds_test.cardinality().numpy()}")
-    
-    vocab = set()
-    tokenizer = WordpieceTokenizer(vocab)
-    for review, _ in ds_train.take(ds_train.cardinality()):
-        tokens = tokenizer.tokenize(review)
-        vocab.update(tokens.numpy().tolist())
-    
-    vocab = sorted(list(vocab))
-    vocab = vocab[:max_vocab_size]
-    
-    tokenizer = WordpieceTokenizer(vocab, token_out_type=tf.int32)
-
-    def encode(text, label):
-        encoded_text = tokenizer.tokenize(text)
-        return encoded_text, label
-    
-    def pad_and_batch(ds, batch_size):
-        return ds.map(encode).padded_batch(batch_size, padded_shapes=([max_seq_len], []))
-
-    ds_train = pad_and_batch(ds_train, batch_size)
-    ds_val = pad_and_batch(ds_val, batch_size)
-    ds_test = pad_and_batch(ds_test, batch_size)
-    
-    return (tfds.as_numpy(ds_train), tfds.as_numpy(ds_val), tfds.as_numpy(ds_test)), vocab, tokenizer
+    return train_loader, val_loader, tokenizer
