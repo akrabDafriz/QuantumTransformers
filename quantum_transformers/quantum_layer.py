@@ -28,8 +28,68 @@ def basic_vqc(c: tc.Circuit, inputs, weights):
             for j in range(num_qubits):
                 c.cnot(j, (j + 1) % num_qubits)
 ## Core idea of Daffa's thesis is to implement and compare different types of VQC in the quantum layer, and how they affect the model performance. Therefore, I am going to make the VQC modular so that we can easily swap different types of VQC.
-## The current VQC is a simple one with RX rotations and CNOT entanglement. I will try to implement other types of VQC such as CZ entanglement, CRX entanglement, and more complex VQC such as hardware-efficient ansatz, QAOA, etc.
+## The current VQC is a simple one with RX rotations and CNOT entanglement. I will try to implement other types of VQC such as CZ entangleme complex VQC such as hardware-efficient ansatz, QAOA, etc.
 
+#########################################################
+#################### Custom VQCs ########################
+#########################################################
+
+# Custom VQC Design 1: RY rotations + CNOT circular entanglements + CNOT circular entanglement
+def vqc_ry_cnot(c: tc.Circuit, inputs, weights):
+    num_qubits = inputs.shape[-1]
+    num_qlayers = weights.shape[-2] # L
+
+    for i in range(num_qlayers):
+        # 1. Rotation Layer
+        for j in range(num_qubits):
+            c.ry(j, theta=weights[i, j])
+        # 2. Entanglement Layer
+        for j in range(num_qubits):
+            c.cnot(j, (j + 1) % num_qubits)
+
+# Custom VQC Design 2: Hadamard + RX rotations + CNOT circular entanglement
+def vqc_h_rx_cnot(c: tc.Circuit, inputs, weights):
+    num_qubits = inputs.shape[-1]
+    num_qlayers = weights.shape[-2] # L
+
+    for i in range(num_qlayers):
+        # 1. Basis Change Layer
+        for j in range(num_qubits):
+            c.h(j)
+        # 2. Rotation Layer
+        for j in range(num_qubits):
+            c.rx(j, theta=weights[i, j])
+        # 3. Entanglement Layer
+        for j in range(num_qubits):
+            c.cnot(j, (j + 1) % num_qubits)
+
+# Custom VQC Design 3: Full-rotation (RX,RY,RZ) + CNOT circular entanglement
+def vqc_all_rot_cnot(c: tc.Circuit, inputs, weights):
+    num_qubits = inputs.shape[-1]
+    num_qlayers = weights.shape[-3] # L (shape is L, 3, num_qubits)
+
+    for i in range(num_qlayers):
+        # 1. Rotation Layer (uses 3 params per qubit)
+        for j in range(num_qubits):
+            c.rx(j, theta=weights[i, 0, j])
+            c.ry(j, theta=weights[i, 1, j])
+            c.rz(j, theta=weights[i, 2, j])
+        # 2. Entanglement Layer
+        for j in range(num_qubits):
+            c.c# Custom VQC Design 4: RX rotations + CRX circular entanglement
+def vqc_rx_crx(c: tc.Circuit, inputs, weights):
+    num_qubits = inputs.shape[-1]
+    num_qlayers = weights.shape[-3] # L (shape is L, 2, num_qubits)
+
+    for i in range(num_qlayers):
+        # 1. Rotation Layer (uses 1st param)
+        for j in range(num_qubits):
+            c.rx(j, theta=weights[i, 0, j])
+        # 2. Entanglement Layer (uses 2nd param)
+        for j in range(num_qubits):
+            c.crx(j, (j + 1) % num_qubits, theta=weights[i, 1, j])
+
+####################################################################
 
 def get_quantum_layer_circuit(inputs, weights,
                               embedding: Callable = angle_embedding, vqc: Callable = basic_vqc):
@@ -61,26 +121,7 @@ def get_circuit(embedding: Callable = angle_embedding, vqc: Callable = basic_vqc
 
     return qpred_batch
 
-# I am asking my github copilot about this part: "vqc: Callable = basic_vqc". Explain what it means!!
-# It means that the function get_circuit has a parameter vqc which is a callable (i.e., a function) that defaults to the function basic_vqc if no other function is provided when calling get_circuit. This allows for flexibility in choosing different variational quantum circuits (VQCs) to be used in the quantum layer, while still providing a default option. That means, if you don't specify a different VQC function when calling get_circuit, it will use basic_vqc by default.
-# How do I specify a different VQC function when calling get_circuit?
-# You can specify a different VQC function by passing it as an argument when calling get_circuit. For example, if you have a custom VQC function called custom_vqc, you can call get_circuit like this:
-# custom_circuit = get_circuit(vqc=custom_vqc)
-# But I'm gonna need a function named custom_vqc first?
-# Yes, you need to define the custom_vqc function first before you can pass it to get_circuit. The custom_vqc function should have the same signature as basic_vqc, meaning it should take a tc.Circuit object, inputs, and weights as parameters and modify the circuit accordingly. Here's an example of how you might define a custom VQC function. Here's an example of how you might define a custom VQC function:
 
-# def custom_vqc(c: tc.Circuit, inputs, weights):
-#     num_qubits = inputs.shape[-1]
-#     num_qlayers = weights.shape[-2]
-
-#     for i in range(num_qlayers):
-#         for j in range(num_qubits):
-#             c.rx(j, theta=weights[i, j])
-#         if num_qubits == 2:
-#             c.cz(0, 1)
-#         elif num_qubits > 2:
-#             for j in range(num_qubits):
-#                 c.cz(j, (j + 1) % num_qubits)
 
 class QuantumLayer(flax.linen.Module):
     circuit: Callable
@@ -94,5 +135,7 @@ class QuantumLayer(flax.linen.Module):
         w = self.param('w', flax.linen.initializers.xavier_normal(), self.w_shape + (self.num_qubits,))
         x = self.circuit(x, w)
         x = jnp.concatenate(x, axis=-1)
+        x = jnp.reshape(x, tuple(shape))
+        return x      x = jnp.concatenate(x, axis=-1)
         x = jnp.reshape(x, tuple(shape))
         return x
