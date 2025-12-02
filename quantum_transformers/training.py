@@ -53,7 +53,7 @@ def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader,
     # For classification, num_classes comes from the function argument. For MLM, it's the vocab size.
     num_output_classes = model.num_tokens if task == 'mlm' else 2
 
-    optimizer = optax.adam(learning_rate=3e-5)
+    optimizer = optax.adam(learning_rate=1e-4)
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
     
     # JIT compile the train and eval steps for performance

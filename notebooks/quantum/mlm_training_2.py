@@ -54,7 +54,7 @@ for d in jax.devices():
 # --- 3. MODEL & DATA PARAMETERS ---
 block_size = 128  # The size of our text chunks
 batch_size = 16   # How many chunks to process at once
-VOCAB_SIZE = 1000 # --- NEW: Define a small vocab size ---
+VOCAB_SIZE = 198 # 198 is the limit for TinyStories Dataset
 
 # --- 4. PREPARE SMALL TOKENIZER ---
 print("\nPreparing small tokenizer...")
@@ -162,8 +162,8 @@ classical_model = Transformer(
     task='mlm',
     hidden_size=8,
     num_heads=2,
-    num_transformer_blocks=4,
-    mlp_hidden_size=8, # --- MODIFICATION: Match hidden_size
+    num_transformer_blocks=8,
+    mlp_hidden_size=8,
     dropout=0.1
 )
 
@@ -192,8 +192,8 @@ quantum_model = Transformer(
     task='mlm',
     hidden_size=8,
     num_heads=2,
-    num_transformer_blocks=4,
-    mlp_hidden_size=8, # --- MODIFICATION: Match hidden_size
+    num_transformer_blocks=8,
+    mlp_hidden_size=8,
     dropout=0.1,
     quantum_attn_circuit=get_circuit(),  # Activate the quantum attention
     quantum_mlp_circuit=get_circuit()    # Activate the quantum MLP
