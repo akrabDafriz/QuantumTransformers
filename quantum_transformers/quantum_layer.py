@@ -1,21 +1,24 @@
-from typing import Callable
-
+from typing import Callable, Tuple
 import tensorcircuit as tc
 import jax.numpy as jnp
-import flax.linen
+import flax.linen as nn
 
 K = tc.set_backend("jax")
 
-
 def angle_embedding(c: tc.Circuit, inputs):
+    """Encodes input data into quantum states using RX rotations."""
     num_qubits = inputs.shape[-1]
-
     for j in range(num_qubits):
         c.rx(j, theta=inputs[j])
 
+# --- Custom VQC Designs ---
 
-# A basic variational quantum circuit (VQC) with RX rotations and CNOT entanglement
+# Base Design: Simple RX + CNOT
 def basic_vqc(c: tc.Circuit, inputs, weights):
+    """
+    Standard VQC with RX rotations and CNOT entanglement.
+    Weights shape: (num_layers, num_qubits)
+    """
     num_qubits = inputs.shape[-1]
     num_qlayers = weights.shape[-2]
 
@@ -27,30 +30,35 @@ def basic_vqc(c: tc.Circuit, inputs, weights):
         elif num_qubits > 2:
             for j in range(num_qubits):
                 c.cnot(j, (j + 1) % num_qubits)
-## Core idea of Daffa's thesis is to implement and compare different types of VQC in the quantum layer, and how they affect the model performance. Therefore, I am going to make the VQC modular so that we can easily swap different types of VQC.
-## The current VQC is a simple one with RX rotations and CNOT entanglement. I will try to implement other types of VQC such as CZ entangleme complex VQC such as hardware-efficient ansatz, QAOA, etc.
 
-#########################################################
-#################### Custom VQCs ########################
-#########################################################
-
-# Custom VQC Design 1: RY rotations + CNOT circular entanglements + CNOT circular entanglement
+# Design 1: RY + CNOT (Rotational Complexity 1)
 def vqc_ry_cnot(c: tc.Circuit, inputs, weights):
+    """
+    VQC with RY rotations and CNOT entanglement.
+    Weights shape: (num_layers, num_qubits)
+    """
     num_qubits = inputs.shape[-1]
-    num_qlayers = weights.shape[-2] # L
+    num_qlayers = weights.shape[-2]
 
     for i in range(num_qlayers):
         # 1. Rotation Layer
         for j in range(num_qubits):
             c.ry(j, theta=weights[i, j])
         # 2. Entanglement Layer
-        for j in range(num_qubits):
-            c.cnot(j, (j + 1) % num_qubits)
+        if num_qubits == 2:
+            c.cnot(0, 1)
+        elif num_qubits > 2:
+            for j in range(num_qubits):
+                c.cnot(j, (j + 1) % num_qubits)
 
-# Custom VQC Design 2: Hadamard + RX rotations + CNOT circular entanglement
+# Design 2: Hadamard + RX + CNOT (Basis Change)
 def vqc_h_rx_cnot(c: tc.Circuit, inputs, weights):
+    """
+    VQC with Hadamard basis change, RX rotations, and CNOT entanglement.
+    Weights shape: (num_layers, num_qubits)
+    """
     num_qubits = inputs.shape[-1]
-    num_qlayers = weights.shape[-2] # L
+    num_qlayers = weights.shape[-2]
 
     for i in range(num_qlayers):
         # 1. Basis Change Layer
@@ -60,13 +68,21 @@ def vqc_h_rx_cnot(c: tc.Circuit, inputs, weights):
         for j in range(num_qubits):
             c.rx(j, theta=weights[i, j])
         # 3. Entanglement Layer
-        for j in range(num_qubits):
-            c.cnot(j, (j + 1) % num_qubits)
+        if num_qubits == 2:
+            c.cnot(0, 1)
+        elif num_qubits > 2:
+            for j in range(num_qubits):
+                c.cnot(j, (j + 1) % num_qubits)
 
-# Custom VQC Design 3: Full-rotation (RX,RY,RZ) + CNOT circular entanglement
+# Design 3: Full Rotations (RX, RY, RZ) + CNOT (Rotational Complexity 2)
 def vqc_all_rot_cnot(c: tc.Circuit, inputs, weights):
+    """
+    VQC with full single-qubit rotations (RX, RY, RZ) and CNOT entanglement.
+    Weights shape: (num_layers, 3, num_qubits)
+    """
     num_qubits = inputs.shape[-1]
-    num_qlayers = weights.shape[-3] # L (shape is L, 3, num_qubits)
+    # Expect weights to be (Layers, 3, Qubits)
+    num_qlayers = weights.shape[-3] 
 
     for i in range(num_qlayers):
         # 1. Rotation Layer (uses 3 params per qubit)
@@ -75,45 +91,61 @@ def vqc_all_rot_cnot(c: tc.Circuit, inputs, weights):
             c.ry(j, theta=weights[i, 1, j])
             c.rz(j, theta=weights[i, 2, j])
         # 2. Entanglement Layer
-        for j in range(num_qubits):
-            c.c# Custom VQC Design 4: RX rotations + CRX circular entanglement
+        if num_qubits == 2:
+            c.cnot(0, 1)
+        elif num_qubits > 2:
+            for j in range(num_qubits):
+                c.cnot(j, (j + 1) % num_qubits)
+
+# Design 4: RX + Controlled-RX (Trainable Entanglement)
 def vqc_rx_crx(c: tc.Circuit, inputs, weights):
+    """
+    VQC with RX rotations and trainable Controlled-RX (CRX) entanglement.
+    Weights shape: (num_layers, 2, num_qubits)
+    """
     num_qubits = inputs.shape[-1]
-    num_qlayers = weights.shape[-3] # L (shape is L, 2, num_qubits)
+    # Expect weights to be (Layers, 2, Qubits)
+    num_qlayers = weights.shape[-3]
 
     for i in range(num_qlayers):
         # 1. Rotation Layer (uses 1st param)
         for j in range(num_qubits):
             c.rx(j, theta=weights[i, 0, j])
         # 2. Entanglement Layer (uses 2nd param)
-        for j in range(num_qubits):
-            c.crx(j, (j + 1) % num_qubits, theta=weights[i, 1, j])
+        if num_qubits == 2:
+             c.crx(0, 1, theta=weights[i, 1, 0])
+        elif num_qubits > 2:
+            for j in range(num_qubits):
+                # Use the 2nd parameter set for CRX gates
+                c.crx(j, (j + 1) % num_qubits, theta=weights[i, 1, j])
 
-####################################################################
 
 def get_quantum_layer_circuit(inputs, weights,
                               embedding: Callable = angle_embedding, vqc: Callable = basic_vqc):
     """
-    Equivalent to the following PennyLane circuit:
-        def circuit(inputs, weights):
-            qml.templates.AngleEmbedding(inputs, wires=range(num_qubits))
-            qml.templates.BasicEntanglerLayers(weights, wires=range(num_qubits))
+    Constructs the TensorCircuit object using the provided embedding and VQC functions.
     """
-
     num_qubits = inputs.shape[-1]
-
     c = tc.Circuit(num_qubits)
     embedding(c, inputs)
     vqc(c, inputs, weights)
-
     return c
 
 
 def get_circuit(embedding: Callable = angle_embedding, vqc: Callable = basic_vqc,
                 torch_interface: bool = False):
+    """
+    Returns a vectorized JAX function that executes the quantum circuit.
+    """
     def qpred(inputs, weights):
         c = get_quantum_layer_circuit(inputs, weights, embedding, vqc)
-        return K.real(jnp.array([c.expectation_ps(z=[i]) for i in range(weights.shape[1])]))
+        # We measure the expectation of Z on all qubits (conceptually similar to measurement)
+        # If the weight shape is complex (e.g. Design 3), we need to ensure we map output correctly.
+        # Here we just return Z expectation on all qubits, which matches input dimension (num_qubits).
+        # We assume weights.shape[1] is NOT used for determining output size, 
+        # but inputs.shape[-1] (num_qubits) is the output size.
+        num_qubits = inputs.shape[-1]
+        return K.real(jnp.array([c.expectation_ps(z=[i]) for i in range(num_qubits)]))
 
     qpred_batch = K.vmap(qpred, vectorized_argnums=0)
     if torch_interface:
@@ -122,20 +154,30 @@ def get_circuit(embedding: Callable = angle_embedding, vqc: Callable = basic_vqc
     return qpred_batch
 
 
-
-class QuantumLayer(flax.linen.Module):
-    circuit: Callable
+class QuantumLayer(nn.Module):
+    """
+    A Flax Linen Module wrapping the quantum circuit.
+    """
     num_qubits: int
-    w_shape: tuple = (1,)
+    w_shape: tuple = (1,) # Shape of weights (e.g., (layers,) or (layers, 3))
+    circuit: Callable = get_circuit()
 
-    @flax.linen.compact
+    @nn.compact
     def __call__(self, x):
         shape = x.shape
+        # Flatten input to (batch * seq_len, hidden_size)
         x = jnp.reshape(x, (-1, shape[-1]))
-        w = self.param('w', flax.linen.initializers.xavier_normal(), self.w_shape + (self.num_qubits,))
+        
+        # Initialize weights. 
+        # The final weight shape will be self.w_shape + (self.num_qubits,)
+        # e.g., if w_shape is (2, 3), weights will be (2, 3, num_qubits)
+        w = self.param('w', nn.initializers.xavier_normal(), self.w_shape + (self.num_qubits,))
+        
+        # Execute circuit
         x = self.circuit(x, w)
-        x = jnp.concatenate(x, axis=-1)
-        x = jnp.reshape(x, tuple(shape))
-        return x      x = jnp.concatenate(x, axis=-1)
+        
+        # Reshape back to original dimensions
+        # x comes out as (batch * seq_len, num_qubits)
+        # We assume num_qubits == hidden_size
         x = jnp.reshape(x, tuple(shape))
         return x
