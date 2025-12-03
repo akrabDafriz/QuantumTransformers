@@ -34,158 +34,193 @@ def cross_entropy_loss(logits, labels, num_classes):
     # Calculate mean over non-masked positions
     return jnp.sum(losses) / (jnp.sum(weights) + 1e-8)  # Add small epsilon to prevent division by zero
 
-def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader, num_epochs,
-                       task='classification'):
+def create_train_state(rng, model, sample_input, learning_rate):
+    """Creates initial TrainState."""
+    params = model.init(rng, sample_input, train=True)['params']
+    tx = optax.adamw(learning_rate)
+    return train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
-    # Initialize model and optimizer
-    key = jax.random.PRNGKey(0)
-    key, dropout_key = jax.random.split(key)
+@jax.jit
+def train_step(state, batch, dropout_rng, num_classes):
+    """Runs a single training step."""
+    inputs, targets = batch
     
-    # Create a fresh generator and get the first batch for initialization
-    # We need the dataloader to be callable to get a fresh iterator
-    train_loader_iter = train_dataloader()
-    init_batch = next(iter(train_loader_iter))[0]
-    
-    params = model.init({'params': key, 'dropout': dropout_key}, init_batch, train=False)['params']
+    def loss_fn(params):
+        logits = state.apply_fn({'params': params}, inputs, train=True, rngs={'dropout': dropout_rng})
+        if logits.ndim == 3: # MLM
+             loss = cross_entropy_loss(logits, targets, num_classes)
+        else: # Classification
+             loss = optax.softmax_cross_entropy_with_integer_labels(logits, targets).mean()
+        return loss, logits
 
-    print(f"Number of parameters = {sum(p.size for p in jax.tree_util.tree_leaves(params))}")
-    
-    # For classification, num_classes comes from the function argument. For MLM, it's the vocab size.
-    num_output_classes = model.num_tokens if task == 'mlm' else 2
+    grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
+    (loss, logits), grads = grad_fn(state.params)
+    state = state.apply_gradients(grads=grads)
+    return state, loss, logits
 
-    optimizer = optax.adam(learning_rate=1e-4)
-    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
+@jax.jit
+def eval_step(state, batch):
+    """Runs a single evaluation step."""
+    inputs, targets = batch
+    logits = state.apply_fn({'params': state.params}, inputs, train=False)
     
-    # JIT compile the train and eval steps for performance
-    @jax.jit
-    def train_step(state, batch, dropout_key):
-        inputs, labels = batch
+    if logits.ndim == 3: # MLM
+        # For evaluation, we assume the same loss logic
+        # We need num_classes here, but it's implicit in logits shape [-1]
+        num_classes = logits.shape[-1]
+        loss = cross_entropy_loss(logits, targets, num_classes)
+    else: # Classification
+        loss = optax.softmax_cross_entropy_with_integer_labels(logits, targets).mean()
         
-        def loss_fn(params):
-            # Pass the input tensor directly to the model
-            logits = state.apply_fn({'params': params}, inputs, train=True,
-                                    rngs={'dropout': dropout_key})
-            
-            if task == 'classification':
-                loss = optax.sigmoid_binary_cross_entropy(logits, onehot(labels, num_output_classes)).mean()
-            elif task == 'mlm':
-                loss = cross_entropy_loss(logits, labels, num_classes=num_output_classes)
-            else:
-                raise ValueError("Task must be 'classification' or 'mlm'")
-            return loss
-        
-        grad_fn = jax.value_and_grad(loss_fn)
-        loss, grads = grad_fn(state.params)
-        state = state.apply_gradients(grads=grads)
-        return state, loss
+    return loss, logits, targets
 
-    @jax.jit
-    def eval_step(state, batch):
-        inputs, labels = batch
-        # Pass the input tensor directly to the model
-        logits = state.apply_fn({'params': state.params}, inputs, train=False)
-        
-        if task == 'classification':
-            loss = optax.sigmoid_binary_cross_entropy(logits, onehot(labels, num_output_classes)).mean()
-            return loss, logits, labels
-        elif task == 'mlm':
-            loss = cross_entropy_loss(logits, labels, num_classes=num_output_classes)
-            return loss, None, None # No predictions needed for PPL calculation
-        else:
-            raise ValueError("Task must be 'classification' or 'mlm'")
-
-    best_val_metric = -1.0 if task == 'classification' else float('inf')
+def train_and_evaluate(model, train_dataloader, val_dataloader, test_dataloader, 
+                       task='classification', num_epochs=10, learning_rate=1e-3, num_classes=None):
+    
+    rng = jax.random.PRNGKey(0)
+    rng, init_rng = jax.random.split(rng)
+    
+    # Initialize state
+    # We need to get one batch to initialize the model parameters
+    # The dataloader is a generator, so we can't just index it.
+    sample_batch = next(iter(train_dataloader))
+    sample_input = jnp.array(sample_batch[0])
+    state = create_train_state(init_rng, model, sample_input, learning_rate)
+    
+    best_val_metric = -float('inf') if task == 'classification' else float('inf')
+    best_state = state
     best_epoch = 0
-    best_state = state  # <<< --- ADD: Initialize best_state
+    
+    train_losses = []
+    val_losses = []
+    val_metrics = [] # AUC for classification, Perplexity for MLM
+
+    print(f"Starting training for {num_epochs} epochs...")
     start_time = time.time()
     
     for epoch in range(num_epochs):
-        # --- TRAINING ---
-        total_loss = 0
-        num_batches = 0
-        # Re-create the generator for each epoch
-        pbar = tqdm(train_dataloader(), desc=f"Epoch {epoch + 1}/{num_epochs}")
-        for batch in pbar:
-            key, dropout_key = jax.random.split(key)
-            state, loss = train_step(state, batch, dropout_key)
-            total_loss += loss
-            num_batches += 1
-            
-            if task == 'classification':
-                 pbar.set_postfix(Loss=f"{loss:.4f}")
-            elif task == 'mlm':
-                ppl = jnp.exp(loss)
-                pbar.set_postfix(Loss=f"{loss:.4f}", PPL=f"{ppl:.2f}")
-
-        avg_train_loss = total_loss / num_batches
+        epoch_start_time = time.time()
         
-        # --- VALIDATION ---
-        total_val_loss = 0
-        num_val_batches = 0
+        # --- TRAINING ---
+        total_train_loss = 0
+        num_train_batches = 0
+        
+        # Use tqdm for progress bar
+        pbar_train = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]")
+        for batch in pbar_train:
+            batch = (jnp.array(batch[0]), jnp.array(batch[1]))
+            dropout_rng, rng = jax.random.split(rng)
+            state, loss, _ = train_step(state, batch, dropout_rng, num_classes)
+            total_train_loss += loss
+            num_train_batches += 1
+            pbar_train.set_postfix({'loss': float(loss)})
+            
+        avg_train_loss = total_train_loss / num_train_batches
+        train_losses.append(avg_train_loss)
+        
+        # --- VALIDATION (Modified to handle None) ---
+        if val_dataloader is not None:
+            total_val_loss = 0
+            num_val_batches = 0
+            all_preds, all_labels = [], []
+            
+            # Re-instantiate validation iterator if it's a generator/dataloader
+            pbar_val = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
+            for batch in pbar_val:
+                batch = (jnp.array(batch[0]), jnp.array(batch[1]))
+                loss, preds, labels = eval_step(state, batch)
+                total_val_loss += loss
+                num_val_batches += 1
+                
+                if task == 'classification':
+                    # Store probabilities for AUC
+                    all_preds.append(jax.nn.softmax(preds, axis=-1))
+                    all_labels.append(labels)
+
+            avg_val_loss = total_val_loss / num_val_batches
+            val_losses.append(avg_val_loss)
+            
+            # Calculate Metric
+            if task == 'classification':
+                # Concatenate all batches
+                val_preds = jnp.concatenate([p[:, 1] for p in all_preds]) # Prob of class 1
+                val_labels = jnp.concatenate(all_labels)
+                try:
+                    current_val_metric = roc_auc_score(val_labels, val_preds)
+                except ValueError:
+                     current_val_metric = 0.5 # Handle edge cases with 1 class in batch
+                metric_name = "AUC"
+                is_better = current_val_metric > best_val_metric
+            else: # MLM
+                current_val_metric = jnp.exp(avg_val_loss) # Perplexity
+                metric_name = "PPL"
+                is_better = current_val_metric < best_val_metric
+
+            val_metrics.append(current_val_metric)
+            
+            val_str = f"Val Loss: {avg_val_loss:.4f}, Val {metric_name}: {current_val_metric:.4f}"
+            
+            if is_better:
+                best_val_metric = current_val_metric
+                best_state = state
+                best_epoch = epoch + 1
+        else:
+            # Handle NO Validation Set
+            avg_val_loss = None
+            current_val_metric = None
+            val_losses.append(None)
+            val_metrics.append(None)
+            metric_name = "N/A"
+            val_str = "Val: N/A"
+            
+            # Strategy: Save the latest state as the best since we can't judge performance
+            best_state = state
+            best_epoch = epoch + 1
+
+        epoch_time = time.time() - epoch_start_time
+        print(f"Epoch {epoch+1} completed in {epoch_time:.2f}s | Train Loss: {avg_train_loss:.4f} | {val_str}")
+
+    total_training_time = time.time() - start_time
+    
+    # Formatting for final print
+    if val_dataloader is not None:
+        metric_value = f"{best_val_metric*100:.2f}%" if task == 'classification' else f"{best_val_metric:.4f}"
+        print(f"Total training time = {total_training_time:.2f}s, Best {metric_name} = {metric_value} at epoch {best_epoch}")
+    else:
+        print(f"Total training time = {total_training_time:.2f}s, Validation skipped.")
+
+    # --- TESTING ---
+    # Use the best_state for testing
+    if test_dataloader is not None:
+        total_test_loss = 0
+        num_test_batches = 0
         all_preds, all_labels = [], []
-        pbar_val = tqdm(val_dataloader(), desc="Validation", leave=False)
-        for batch in pbar_val:
-            loss, preds, labels = eval_step(state, batch)
-            total_val_loss += loss
-            num_val_batches += 1
+        pbar_test = tqdm(test_dataloader, desc="Testing")
+        for batch in pbar_test:
+            batch = (jnp.array(batch[0]), jnp.array(batch[1]))
+            loss, preds, labels = eval_step(best_state, batch)
+            total_test_loss += loss
+            num_test_batches += 1
             if task == 'classification':
                 all_preds.append(jax.nn.softmax(preds, axis=-1))
                 all_labels.append(labels)
 
-        avg_val_loss = total_val_loss / num_val_batches
+        avg_test_loss = total_test_loss / num_test_batches
         
-        # --- METRIC CALCULATION & EARLY STOPPING ---
         if task == 'classification':
-            val_preds = jnp.concatenate([p[:, 1] for p in all_preds])
-            val_labels = jnp.concatenate(all_labels)
-            val_auc = roc_auc_score(val_labels, val_preds)
-            print(f"Epoch {epoch + 1}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}, Val AUC = {val_auc*100:.2f}%")
-            
-            if val_auc > best_val_metric:
-                best_val_metric = val_auc
-                best_epoch = epoch + 1
-                best_state = state  # <<< --- ADD: Update best_state
-        
-        elif task == 'mlm':
-            val_ppl = jnp.exp(avg_val_loss)
-            print(f"Epoch {epoch + 1}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}, Val PPL = {val_ppl:.2f}")
-            
-            if avg_val_loss < best_val_metric:
-                best_val_metric = avg_val_loss
-                best_epoch = epoch + 1
-                best_state = state  # <<< --- ADD: Update best_state
-
-    total_training_time = time.time() - start_time
-    metric_name = "best validation AUC" if task == 'classification' else "best validation loss"
-    metric_value = f"{best_val_metric*100:.2f}%" if task == 'classification' else f"{best_val_metric:.4f}"
-    print(f"Total training time = {total_training_time:.2f}s, {metric_name} = {metric_value} at epoch {best_epoch}")
-    
-    # --- TESTING ---
-    # Use the best_state for testing
-    total_test_loss = 0
-    num_test_batches = 0
-    all_preds, all_labels = [], []
-    pbar_test = tqdm(test_dataloader(), desc="Testing")
-    for batch in pbar_test:
-        # <<< --- CHANGE: Use best_state, not final state --- >>>
-        loss, preds, labels = eval_step(best_state, batch)
-        total_test_loss += loss
-        num_test_batches += 1
-        if task == 'classification':
-            all_preds.append(jax.nn.softmax(preds, axis=-1))
-            all_labels.append(labels)
-
-    avg_test_loss = total_test_loss / num_test_batches
-    
-    if task == 'classification':
-        test_preds = jnp.concatenate([p[:, 1] for p in all_preds])
-        test_labels = jnp.concatenate(all_labels)
-        test_auc = roc_auc_score(test_labels, test_preds)
-        print(f"Test Loss = {avg_test_loss:.4f}, Test AUC = {test_auc*100:.2f}%")
-        # <<< --- CHANGE: Return best_state --- >>>
-        return (avg_test_loss, test_auc, test_preds, test_labels), best_state
-    elif task == 'mlm':
-        test_ppl = jnp.exp(avg_test_loss)
-        print(f"Test Loss = {avg_test_loss:.4f}, Test PPL = {test_ppl:.2f}")
-        # <<< --- CHANGE: Return best_state --- >>>
-        return (avg_test_loss, test_ppl), best_state
+            test_preds = jnp.concatenate([p[:, 1] for p in all_preds])
+            test_labels = jnp.concatenate(all_labels)
+            try:
+                test_auc = roc_auc_score(test_labels, test_preds)
+                print(f"Test Loss = {avg_test_loss:.4f}, Test AUC = {test_auc*100:.2f}%")
+                return (avg_test_loss, test_auc), best_state
+            except ValueError:
+                print(f"Test Loss = {avg_test_loss:.4f}, Test AUC = N/A (Error)")
+                return (avg_test_loss, 0.0), best_state
+        else: # MLM
+            test_ppl = jnp.exp(avg_test_loss)
+            print(f"Test Loss = {avg_test_loss:.4f}, Test PPL = {test_ppl:.4f}")
+            return (avg_test_loss, test_ppl), best_state
+    else:
+        print("No test set provided.")
+        return (None, None), best_state
