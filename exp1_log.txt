@@ -1,0 +1,164 @@
+nohup: ignoring input
+2025-12-04 15:54:35.625830: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1764838475.683563 1368188 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1764838475.701119 1368188 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1764838475.827542 1368188 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1764838475.827566 1368188 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1764838475.827570 1368188 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1764838475.827572 1368188 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+Please first ``pip install -U qiskit`` to enable related functionality in translation module
+Please first ``pip install -U cirq`` to enable related functionality in translation module
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+JAX Devices: [gpu(id=0)]
+
+
+################################################
+### STARTING EXPERIMENT 1 ###
+################################################
+
+============================================================
+Running Classical on MC Dataset
+============================================================
+Loading Datasets...
+Loading MC/RP data.
+Train: data/mc_train_data.txt
+Val:   data/mc_dev_data.txt
+Test:  data/mc_test_data.txt
+Data Loaded. Counts -> Train: 0, Val: 0, Test: 0
+Tokenizer trained. Vocab size: 2
+SKIPPING: Could not load data for mc. Error: num_samples should be a positive integer value, but got num_samples=0
+
+============================================================
+Running Classical on RP Dataset
+============================================================
+Loading Datasets...
+Loading MC/RP data.
+Train: data/rp_train_data.txt
+Val:   None
+Test:  data/rp_test_data.txt
+Data Loaded. Counts -> Train: 0, Val: 0, Test: 0
+Tokenizer trained. Vocab size: 2
+SKIPPING: Could not load data for rp. Error: num_samples should be a positive integer value, but got num_samples=0
+
+============================================================
+Running Classical on IMDB Dataset
+============================================================
+Loading Datasets...
+Loading sentiment data from: ['data/imdb_labelled.txt']
+Data Loaded. Counts -> Train: 0, Val: 0, Test: 0
+Tokenizer trained. Vocab size: 2
+SKIPPING: Could not load data for imdb. Error: num_samples should be a positive integer value, but got num_samples=0
+
+============================================================
+Running Classical on AMAZON Dataset
+============================================================
+Loading Datasets...
+Loading sentiment data from: ['data/amazon_cells_labelled.txt']
+Data Loaded. Counts -> Train: 0, Val: 0, Test: 0
+Tokenizer trained. Vocab size: 2
+SKIPPING: Could not load data for amazon. Error: num_samples should be a positive integer value, but got num_samples=0
+
+============================================================
+Running Classical on YELP Dataset
+============================================================
+Loading Datasets...
+Loading sentiment data from: ['data/yelp_labelled.txt']
+Data Loaded. Counts -> Train: 0, Val: 0, Test: 0
+Tokenizer trained. Vocab size: 2
+SKIPPING: Could not load data for yelp. Error: num_samples should be a positive integer value, but got num_samples=0
+
+============================================================
+Running Basic VQC on MC Dataset
+============================================================
+Loading Datasets...
+Loading MC/RP data.
+Train: data/mc_train_data.txt
+Val:   data/mc_dev_data.txt
+Test:  data/mc_test_data.txt
+Data Loaded. Counts -> Train: 0, Val: 0, Test: 0
+Tokenizer trained. Vocab size: 2
+SKIPPING: Could not load data for mc. Error: num_samples should be a positive integer value, but got num_samples=0
+
+============================================================
+Running Basic VQC on RP Dataset
+============================================================
+Loading Datasets...
+Loading MC/RP data.
+Train: data/rp_train_data.txt
+Val:   None
+Test:  data/rp_test_data.txt
+Data Loaded. Counts -> Train: 0, Val: 0, Test: 0
+Tokenizer trained. Vocab size: 2
+SKIPPING: Could not load data for rp. Error: num_samples should be a positive integer value, but got num_samples=0
+
+============================================================
+Running Basic VQC on IMDB Dataset
+============================================================
+Loading Datasets...
+Loading sentiment data from: ['data/imdb_labelled.txt']
+Data Loaded. Counts -> Train: 0, Val: 0, Test: 0
+Tokenizer trained. Vocab size: 2
+SKIPPING: Could not load data for imdb. Error: num_samples should be a positive integer value, but got num_samples=0
+
+============================================================
+Running Basic VQC on AMAZON Dataset
+============================================================
+Loading Datasets...
+Loading sentiment data from: ['data/amazon_cells_labelled.txt']
+Data Loaded. Counts -> Train: 0, Val: 0, Test: 0
+Tokenizer trained. Vocab size: 2
+SKIPPING: Could not load data for amazon. Error: num_samples should be a positive integer value, but got num_samples=0
+
+============================================================
+Running Basic VQC on YELP Dataset
+============================================================
+Loading Datasets...
+Loading sentiment data from: ['data/yelp_labelled.txt']
+Data Loaded. Counts -> Train: 0, Val: 0, Test: 0
+Tokenizer trained. Vocab size: 2
+SKIPPING: Could not load data for yelp. Error: num_samples should be a positive integer value, but got num_samples=0
+
+
+==============================
+FINAL SUMMARY RESULTS
+==============================
+Exp1_mc_Classical: Failed/Skipped
+Exp1_rp_Classical: Failed/Skipped
+Exp1_imdb_Classical: Failed/Skipped
+Exp1_amazon_Classical: Failed/Skipped
+Exp1_yelp_Classical: Failed/Skipped
+Exp1_mc_Basic VQC: Failed/Skipped
+Exp1_rp_Basic VQC: Failed/Skipped
+Exp1_imdb_Basic VQC: Failed/Skipped
+Exp1_amazon_Basic VQC: Failed/Skipped
+Exp1_yelp_Basic VQC: Failed/Skipped

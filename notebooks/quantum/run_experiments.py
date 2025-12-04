@@ -2,7 +2,7 @@ import argparse
 import os
 import jax
 import numpy as np
-import pickle  # Added for saving history
+import pickle
 from quantum_transformers.datasets import get_custom_classification_dataloader
 from quantum_transformers.transformers import Transformer
 from quantum_transformers.quantum_layer import (
@@ -54,14 +54,18 @@ DATA_PATHS = {
     }
 }
 
-RESULTS_DIR = 'results' # Directory to save pickle files
+RESULTS_DIR = 'results'
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 # --- Experiment Definitions ---
 
 def get_experiment_config(experiment_id):
     if experiment_id == 1:
-        return [("Basic VQC", basic_vqc, (NUM_LAYERS_VQC,))]
+        # Added Classical Model to baseline
+        return [
+            ("Classical", None, None), 
+            ("Basic VQC", basic_vqc, (NUM_LAYERS_VQC,))
+        ]
     elif experiment_id == 2:
         return [
             ("Design 1 (RY+CNOT)", vqc_ry_cnot, (NUM_LAYERS_VQC,)),
@@ -105,8 +109,16 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
 
     # 2. Initialize Model
     print(f"Initializing Transformer with {vqc_name}...")
-    circuit_fn = get_circuit(vqc=vqc_func)
     
+    # Handle Classical vs Quantum initialization
+    if vqc_func is not None:
+        circuit_fn = get_circuit(vqc=vqc_func)
+        current_w_shape = w_shape
+    else:
+        # Classical case: No quantum circuit
+        circuit_fn = None
+        current_w_shape = (1,) # Dummy shape, unused by classical layers
+
     model = Transformer(
         num_tokens=tokenizer.get_vocab_size(),
         max_seq_len=MAX_SEQ_LEN,
@@ -116,14 +128,13 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
         num_transformer_blocks=NUM_BLOCKS,
         mlp_hidden_size=MLP_HIDDEN,
         dropout=0.1,
-        quantum_w_shape=w_shape,
+        quantum_w_shape=current_w_shape,
         quantum_attn_circuit=circuit_fn,
         quantum_mlp_circuit=circuit_fn
     )
 
     # 3. Train
     print("Starting Training...")
-    # Unpack the new history object
     (test_loss, test_acc), best_state, history = train_and_evaluate(
         model=model,
         train_dataloader=train_loader,
@@ -136,8 +147,10 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
     
     print(f"RESULT: {dataset_name} | {vqc_name} | Test Acc: {test_acc:.4f}")
 
-    # 4. Save History for Plotting
-    save_filename = f"Exp{exp_id}_{dataset_name}_{vqc_name.replace(' ', '_').replace('(', '').replace(')', '').replace('+', '')}.pkl"
+    # 4. Save History
+    # Sanitize filename
+    safe_vqc_name = vqc_name.replace(' ', '_').replace('(', '').replace(')', '').replace('+', '')
+    save_filename = f"Exp{exp_id}_{dataset_name}_{safe_vqc_name}.pkl"
     save_path = os.path.join(RESULTS_DIR, save_filename)
     
     with open(save_path, 'wb') as f:
@@ -168,7 +181,6 @@ def main():
         for vqc_name, vqc_func, w_shape in configs:
             for ds_name in datasets_to_run:
                 key = f"Exp{exp_id}_{ds_name}_{vqc_name}"
-                # Pass exp_id to run_single_trial for filename generation
                 acc = run_single_trial(ds_name, DATA_PATHS[ds_name], vqc_name, vqc_func, w_shape, exp_id)
                 results[key] = acc
 
