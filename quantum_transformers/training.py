@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-import numpy as np  # Added for CPU array conversion
+import numpy as np
 import optax
 import time
 from flax.training import train_state
@@ -28,7 +28,9 @@ def cross_entropy_loss(logits, labels, num_classes):
 
 def create_train_state(rng, model, sample_input, learning_rate):
     """Creates initial TrainState."""
-    params = model.init(rng, sample_input, train=True)['params']
+    # FIX: Set train=False here. 
+    # Initialization doesn't need active dropout, avoiding the "needs PRNG for dropout" error.
+    params = model.init(rng, sample_input, train=False)['params']
     tx = optax.adamw(learning_rate)
     return train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
