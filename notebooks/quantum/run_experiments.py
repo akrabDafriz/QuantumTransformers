@@ -1,6 +1,7 @@
 import argparse
 import os
 import jax
+import torch # Added for manual seed
 import numpy as np
 import pickle
 from quantum_transformers.datasets import get_custom_classification_dataloader
@@ -27,7 +28,6 @@ NUM_EPOCHS = 5
 LEARNING_RATE = 1e-3
 NUM_LAYERS_VQC = 2
 
-# Dataset Paths
 DATA_PATHS = {
     'mc': {
         'type': 'mc_rp',
@@ -35,8 +35,8 @@ DATA_PATHS = {
         'val': 'data/mc_dev_data.txt',
         'test': 'data/mc_test_data.txt',
         'tokenizer': 'wordlevel',
-        'vocab': 5000, # Not strictly enforced for WordLevel, but good default
-        'shared_files': None # Tokenizer trained only on MC
+        'vocab': 17,  # Exact vocab size
+        'shared_files': None
     },
     'rp': {
         'type': 'mc_rp',
@@ -44,15 +44,15 @@ DATA_PATHS = {
         'val': None,
         'test': 'data/rp_test_data.txt',
         'tokenizer': 'wordlevel',
-        'vocab': 5000,
-        'shared_files': None # Tokenizer trained only on RP
+        'vocab': 115, # Exact vocab size
+        'shared_files': None
     },
     'imdb': {
         'type': 'sentiment',
         'files': ['data/imdb_labelled.txt'],
         'tokenizer': 'bpe',
         'vocab': 1000,
-        'shared_files': True # Flag to trigger shared logic
+        'shared_files': True
     },
     'amazon': {
         'type': 'sentiment',
@@ -70,7 +70,6 @@ DATA_PATHS = {
     }
 }
 
-# Define the group of files that constitute the "Shared Sentiment" corpus
 SENTIMENT_FILES = [
     'data/imdb_labelled.txt', 
     'data/amazon_cells_labelled.txt', 
@@ -101,16 +100,19 @@ def get_experiment_config(experiment_id):
         raise ValueError("Invalid Experiment ID. Choose 1-4.")
 
 
-def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, exp_id):
+def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, exp_id, trial_num):
     print(f"\n{'='*60}")
-    print(f"Running {vqc_name} on {dataset_name.upper()} Dataset")
+    print(f"Running {vqc_name} on {dataset_name.upper()} Dataset | Trial {trial_num}")
     print(f"{'='*60}")
+    
+    # Set seed for this trial (affects Data Split for sentiment & Weight Init)
+    torch.manual_seed(trial_num)
 
-    # Determine Tokenizer Files (Shared or Specific)
+    # Determine Tokenizer Files
     if dataset_config.get('shared_files') is True:
         tokenizer_files = SENTIMENT_FILES
     else:
-        tokenizer_files = None # Will default to training on the loaded dataset itself
+        tokenizer_files = None 
 
     # 1. Load Data
     print("Loading Datasets...")
@@ -121,9 +123,9 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
                 file_paths=dataset_config['files'],
                 batch_size=BATCH_SIZE,
                 max_seq_len=MAX_SEQ_LEN,
-                tokenizer_type=dataset_config['tokenizer'], # 'bpe'
-                vocab_size=dataset_config['vocab'],         # 1000
-                tokenizer_files=tokenizer_files             # Shared corpus
+                tokenizer_type=dataset_config['tokenizer'], 
+                vocab_size=dataset_config['vocab'],         
+                tokenizer_files=tokenizer_files             
             )
         else:
             train_loader, val_loader, test_loader, tokenizer = get_custom_classification_dataloader(
@@ -133,9 +135,9 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
                 test_path=dataset_config['test'],
                 batch_size=BATCH_SIZE,
                 max_seq_len=MAX_SEQ_LEN,
-                tokenizer_type=dataset_config['tokenizer'], # 'wordlevel'
-                vocab_size=dataset_config['vocab'],         # Ignored/Default
-                tokenizer_files=tokenizer_files             # None (Specific)
+                tokenizer_type=dataset_config['tokenizer'], 
+                vocab_size=dataset_config['vocab'],         
+                tokenizer_files=tokenizer_files             
             )
     except Exception as e:
         print(f"SKIPPING: Could not load data for {dataset_name}. Error: {e}")
@@ -165,7 +167,7 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
         quantum_mlp_circuit=circuit_fn
     )
 
-    # 3. Train
+    # 3. Train (Pass seed)
     print("Starting Training...")
     (test_loss, test_acc), best_state, history = train_and_evaluate(
         model=model,
@@ -174,14 +176,15 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
         test_dataloader=test_loader,
         task='classification',
         num_epochs=NUM_EPOCHS,
-        learning_rate=LEARNING_RATE
+        learning_rate=LEARNING_RATE,
+        seed=trial_num # Ensure different initialization per trial
     )
     
-    print(f"RESULT: {dataset_name} | {vqc_name} | Test Acc: {test_acc:.4f}")
+    print(f"RESULT: {dataset_name} | {vqc_name} | Run {trial_num} | Test Acc: {test_acc:.4f}")
 
-    # 4. Save History
+    # 4. Save History (With Run Number)
     safe_vqc_name = vqc_name.replace(' ', '_').replace('(', '').replace(')', '').replace('+', '')
-    save_filename = f"Exp{exp_id}_{dataset_name}_{safe_vqc_name}.pkl"
+    save_filename = f"Exp{exp_id}_{dataset_name}_{safe_vqc_name}_run{trial_num}.pkl"
     save_path = os.path.join(RESULTS_DIR, save_filename)
     
     with open(save_path, 'wb') as f:
@@ -211,9 +214,19 @@ def main():
         
         for vqc_name, vqc_func, w_shape in configs:
             for ds_name in datasets_to_run:
-                key = f"Exp{exp_id}_{ds_name}_{vqc_name}"
-                acc = run_single_trial(ds_name, DATA_PATHS[ds_name], vqc_name, vqc_func, w_shape, exp_id)
-                results[key] = acc
+                
+                # Determine Number of Trials
+                if ds_name in ['mc', 'rp']:
+                    num_trials = 5
+                else:
+                    num_trials = 3
+                
+                print(f"\n>>> Running {num_trials} trials for {ds_name}...")
+                
+                for trial in range(num_trials):
+                    key = f"Exp{exp_id}_{ds_name}_{vqc_name}_run{trial}"
+                    acc = run_single_trial(ds_name, DATA_PATHS[ds_name], vqc_name, vqc_func, w_shape, exp_id, trial)
+                    results[key] = acc
 
     print("\n\n" + "="*30)
     print("FINAL SUMMARY RESULTS")
