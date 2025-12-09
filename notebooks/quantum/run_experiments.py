@@ -27,32 +27,55 @@ NUM_EPOCHS = 5
 LEARNING_RATE = 1e-3
 NUM_LAYERS_VQC = 2
 
+# Dataset Paths
 DATA_PATHS = {
     'mc': {
         'type': 'mc_rp',
         'train': 'data/mc_train_data.txt',
         'val': 'data/mc_dev_data.txt',
-        'test': 'data/mc_test_data.txt'
+        'test': 'data/mc_test_data.txt',
+        'tokenizer': 'wordlevel',
+        'vocab': 5000, # Not strictly enforced for WordLevel, but good default
+        'shared_files': None # Tokenizer trained only on MC
     },
     'rp': {
         'type': 'mc_rp',
         'train': 'data/rp_train_data.txt',
         'val': None,
-        'test': 'data/rp_test_data.txt'
+        'test': 'data/rp_test_data.txt',
+        'tokenizer': 'wordlevel',
+        'vocab': 5000,
+        'shared_files': None # Tokenizer trained only on RP
     },
     'imdb': {
         'type': 'sentiment',
-        'files': ['data/imdb_labelled.txt']
+        'files': ['data/imdb_labelled.txt'],
+        'tokenizer': 'bpe',
+        'vocab': 1000,
+        'shared_files': True # Flag to trigger shared logic
     },
     'amazon': {
         'type': 'sentiment',
-        'files': ['data/amazon_cells_labelled.txt']
+        'files': ['data/amazon_cells_labelled.txt'],
+        'tokenizer': 'bpe',
+        'vocab': 1000,
+        'shared_files': True
     },
     'yelp': {
         'type': 'sentiment',
-        'files': ['data/yelp_labelled.txt']
+        'files': ['data/yelp_labelled.txt'],
+        'tokenizer': 'bpe',
+        'vocab': 1000,
+        'shared_files': True
     }
 }
+
+# Define the group of files that constitute the "Shared Sentiment" corpus
+SENTIMENT_FILES = [
+    'data/imdb_labelled.txt', 
+    'data/amazon_cells_labelled.txt', 
+    'data/yelp_labelled.txt'
+]
 
 RESULTS_DIR = 'results'
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -61,7 +84,6 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 
 def get_experiment_config(experiment_id):
     if experiment_id == 1:
-        # Added Classical Model to baseline
         return [
             ("Classical", None, None), 
             ("Basic VQC", basic_vqc, (NUM_LAYERS_VQC,))
@@ -84,6 +106,12 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
     print(f"Running {vqc_name} on {dataset_name.upper()} Dataset")
     print(f"{'='*60}")
 
+    # Determine Tokenizer Files (Shared or Specific)
+    if dataset_config.get('shared_files') is True:
+        tokenizer_files = SENTIMENT_FILES
+    else:
+        tokenizer_files = None # Will default to training on the loaded dataset itself
+
     # 1. Load Data
     print("Loading Datasets...")
     try:
@@ -92,7 +120,10 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
                 dataset_type='sentiment',
                 file_paths=dataset_config['files'],
                 batch_size=BATCH_SIZE,
-                max_seq_len=MAX_SEQ_LEN
+                max_seq_len=MAX_SEQ_LEN,
+                tokenizer_type=dataset_config['tokenizer'], # 'bpe'
+                vocab_size=dataset_config['vocab'],         # 1000
+                tokenizer_files=tokenizer_files             # Shared corpus
             )
         else:
             train_loader, val_loader, test_loader, tokenizer = get_custom_classification_dataloader(
@@ -101,7 +132,10 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
                 val_path=dataset_config['val'],
                 test_path=dataset_config['test'],
                 batch_size=BATCH_SIZE,
-                max_seq_len=MAX_SEQ_LEN
+                max_seq_len=MAX_SEQ_LEN,
+                tokenizer_type=dataset_config['tokenizer'], # 'wordlevel'
+                vocab_size=dataset_config['vocab'],         # Ignored/Default
+                tokenizer_files=tokenizer_files             # None (Specific)
             )
     except Exception as e:
         print(f"SKIPPING: Could not load data for {dataset_name}. Error: {e}")
@@ -110,14 +144,12 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
     # 2. Initialize Model
     print(f"Initializing Transformer with {vqc_name}...")
     
-    # Handle Classical vs Quantum initialization
     if vqc_func is not None:
         circuit_fn = get_circuit(vqc=vqc_func)
         current_w_shape = w_shape
     else:
-        # Classical case: No quantum circuit
         circuit_fn = None
-        current_w_shape = (1,) # Dummy shape, unused by classical layers
+        current_w_shape = (1,)
 
     model = Transformer(
         num_tokens=tokenizer.get_vocab_size(),
@@ -148,7 +180,6 @@ def run_single_trial(dataset_name, dataset_config, vqc_name, vqc_func, w_shape, 
     print(f"RESULT: {dataset_name} | {vqc_name} | Test Acc: {test_acc:.4f}")
 
     # 4. Save History
-    # Sanitize filename
     safe_vqc_name = vqc_name.replace(' ', '_').replace('(', '').replace(')', '').replace('+', '')
     save_filename = f"Exp{exp_id}_{dataset_name}_{safe_vqc_name}.pkl"
     save_path = os.path.join(RESULTS_DIR, save_filename)
