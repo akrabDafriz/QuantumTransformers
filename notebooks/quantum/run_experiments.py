@@ -20,7 +20,7 @@ from quantum_transformers.training import train_and_evaluate
 
 HIDDEN_SIZE = 8       # Updated to 8 as per your request       
 NUM_HEADS = 2
-NUM_BLOCKS = 4        # <--- Updated to 4 blocks
+NUM_BLOCKS = 2
 MLP_HIDDEN = 8        # Updated to 8 to match HIDDEN_SIZE (prevents shape mismatch)        
 MAX_SEQ_LEN = 32
 BATCH_SIZE = 8        # <--- REDUCED from 16 to 8 to prevent OOM Crashes        
