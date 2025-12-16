@@ -18,12 +18,12 @@ from quantum_transformers.training import train_and_evaluate
 
 # --- Configuration Constants ---
 
-HIDDEN_SIZE = 8       # Updated to 8 as per your request       
+HIDDEN_SIZE = 8      
 NUM_HEADS = 2
 NUM_BLOCKS = 2
-MLP_HIDDEN = 8        # Updated to 8 to match HIDDEN_SIZE (prevents shape mismatch)        
+MLP_HIDDEN = 8             
 MAX_SEQ_LEN = 32
-BATCH_SIZE = 8        # <--- REDUCED from 16 to 8 to prevent OOM Crashes        
+BATCH_SIZE = 16   ## try to increase again
 NUM_EPOCHS = 40       
 LEARNING_RATE = 1e-3
 NUM_LAYERS_VQC = 2
