@@ -9,3 +9,4 @@ venv/
 nohup.out
 imdb-data/
 dataset-downloader.py
+logs/
