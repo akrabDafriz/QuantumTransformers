@@ -28,7 +28,6 @@ def cross_entropy_loss(logits, labels, num_classes):
 
 def create_train_state(rng, model, sample_input, learning_rate):
     """Creates initial TrainState."""
-    # FIX: Set train=False here. 
     # Initialization doesn't need active dropout, avoiding the "needs PRNG for dropout" error.
     params = model.init(rng, sample_input, train=False)['params']
     tx = optax.adamw(learning_rate)
