@@ -4,21 +4,18 @@ This project explores the application of Quantum Transformers for Natural Langua
 
 While classical Transformers have dominated NLP, Quantum Machine Learning (QML) presents a potential paradigm shift. This repository isolates the `MultiHeadSelfAttention` and `FeedForward` components of the Transformer architecture, injecting parameterized quantum circuits (implemented via TensorCircuit and JAX) to evaluate multiple entanglement and rotational strategies.
 
+Rather than fine-tuning pre-existing weights, this project trains all models entirely from scratch to fairly observe the raw impact of quantum layers on learning behavior. Furthermore, the codebase is architected as a highly modular, building-block pipeline.
+
 ## Experimental VQC Designs
 
 A core contribution of this project is the comparison of five distinct quantum circuit architectures applied to the transformer layers. Each design tests a different hypothesis regarding rotational complexity and entanglement capabilities:
 
-Classical Baseline: A standard, non-quantum Transformer layer for performance benchmarking.
-
-Basic VQC: A standard quantum layer using fundamental RX rotations and CNOT entanglement.
-
-Design 1 (RY + CNOT): Tests the effect of RY rotations combined with sequential CNOT entanglement.
-
-Design 2 (Hadamard + RX + CNOT): Introduces a Hadamard basis change prior to RX rotations and CNOT entanglement to evaluate superposition benefits.
-
-Design 3 (Full Rotations + CNOT): Employs full single-qubit rotations (RX, RY, RZ) coupled with CNOT gates, representing a higher rotational complexity.
-
-Design 4 (RX + CRX): Utilizes RX rotations alongside trainable Controlled-RX (CRX) gates to test the efficacy of trainable, dynamic entanglement.
+- Classical Baseline: A standard, non-quantum Transformer layer for performance benchmarking.
+- Basic VQC: A standard quantum layer using fundamental RX rotations and CNOT entanglement.
+- Design 1 (RY + CNOT): Tests the effect of RY rotations combined with sequential CNOT entanglement.
+- Design 2 (Hadamard + RX + CNOT): Introduces a Hadamard basis change prior to RX rotations and CNOT entanglement to evaluate superposition benefits.
+- Design 3 (Full Rotations + CNOT): Employs full single-qubit rotations (RX, RY, RZ) coupled with CNOT gates, representing a higher rotational complexity.
+- Design 4 (RX + CRX): Utilizes RX rotations alongside trainable Controlled-RX (CRX) gates to test the efficacy of trainable, dynamic entanglement.
 
 ## Datasets
 
