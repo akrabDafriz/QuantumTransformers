@@ -11,3 +11,5 @@ imdb-data/
 dataset-downloader.py
 logs/
 *.pkl
+old_README.md
+personal_notes.md

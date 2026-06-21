@@ -1,84 +1,50 @@
-# Quantum Transformers
+# Quantum Transformers for Text Classification: An Analysis of VQC Designs
 
-Quantum Transformers are used for wide range of fields including binary classification (need reference) and computer vision (need reference). However, the training method of Masked Language Model (MLM) is underexplored. Word prediction using MLM was the method used in the original paper of BERT (need reference), introducing a way to pretrain the model bidirectionally, fusing the the left and the right context of a token, instead of left-to-right unidirectional pre-training. Word prediction is applied to test the bidrectional language understanding of the model, instead of just binary sentiment classification. Real-world implementation could then exploit this for inference, creating usecases such as chatbots and code continuing software. 
+This project explores the application of Quantum Transformers for Natural Language Processing (NLP), specifically focusing on text classification. It is a fork of the original Quantum Vision Transformer research, heavily modified to analyze how different Variational Quantum Circuit (VQC) designs impact the training dynamics, convergence, and overall performance of the model.
 
-This project explores how the Quantum Transformer (need reference) can be implemented for word prediction.
+While classical Transformers have dominated NLP, Quantum Machine Learning (QML) presents a potential paradigm shift. This repository isolates the `MultiHeadSelfAttention` and `FeedForward` components of the Transformer architecture, injecting parameterized quantum circuits (implemented via TensorCircuit and JAX) to evaluate multiple entanglement and rotational strategies.
 
-===
+## Experimental VQC Designs
 
+A core contribution of this project is the comparison of five distinct quantum circuit architectures applied to the transformer layers. Each design tests a different hypothesis regarding rotational complexity and entanglement capabilities:
 
-This project explores how the [Transformer](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model)) architecture can be executed on quantum computers. In particular, the focus is on the adaptation of the [Vision Transformer](https://en.wikipedia.org/wiki/Vision_transformer) for the analysis of high-energy physics data.
+Classical Baseline: A standard, non-quantum Transformer layer for performance benchmarking.
 
-The relevance of the work is accentuated by the upcoming start of operation of the [High Luminosity Large Hadron Collider (HL-LHC)](https://hilumilhc.web.cern.ch/content/hl-lhc-project) at the end of this decade. The program will produce enormous quantities of data, which in turn will require vast computing resources. A promising approach for dealing with this huge amount of data could be the application of quantum machine learning (QML), which could reduce the time complexity of classical algorithms by running on quantum computers and obtain better accuracies.
+Basic VQC: A standard quantum layer using fundamental RX rotations and CNOT entanglement.
 
-The work has been undertaken by [Marçal Comajoan Cara](https://marçal.cc/) as part of [Google Summer of Code](https://summerofcode.withgoogle.com) 2023 with the [ML4SCI organization](https://ml4sci.org/).
+Design 1 (RY + CNOT): Tests the effect of RY rotations combined with sequential CNOT entanglement.
 
-You can read more details about the project in [this blog post](https://marçal.cc/blog/gsoc23/), which includes a summary of the results and the potential work that could be done in the future building on it. The research done has also been published in a [paper](https://doi.org/10.3390/axioms13050323) (see below for the citation).
+Design 2 (Hadamard + RX + CNOT): Introduces a Hadamard basis change prior to RX rotations and CNOT entanglement to evaluate superposition benefits.
 
-## Structure
+Design 3 (Full Rotations + CNOT): Employs full single-qubit rotations (RX, RY, RZ) coupled with CNOT gates, representing a higher rotational complexity.
 
-The folder structure of the project is as follows:
-
-- `quantum_transformers/`: the library code for the quantum transformers, as well as for loading the data (`datasets.py`) and training the models (`training.py`).
-  - `quantum_transformers/qmlperfcomp/`: subproject to compare the performance of different quantum machine learning frameworks. In particular, I evaluated [PennyLane](https://pennylane.ai/) and [TensorCircuit](https://tensorcircuit.readthedocs.io/) (spoiler: TensorCircuit is much faster).
-- `notebooks`: the notebooks used for evaluating the models and showing their usage and performance. Each notebook is named after the dataset it uses.
-  - `visualizations.ipynb`: notebook visualizing the image datasets.
-  - `classical/`: classical counterparts as baselines.
-  - `quantum/`: the quantum transformers. Additionally, `qvit_cerrat_et_al.ipynb` is a notebook trying to reproduce the results of ["Quantum Vision Transformers" by Cerrat et al.](https://arxiv.org/abs/2106.03173), although unsuccessfully.
-- `hpopt/`: hyperparameter optimization scripts. The folder contains a README with instructions on how to run them.
-
+Design 4 (RX + CRX): Utilizes RX rotations alongside trainable Controlled-RX (CRX) gates to test the efficacy of trainable, dynamic entanglement.
 
 ## Datasets
 
-The architectures have been evaluated on the following datasets:
+The models are evaluated against a mix of classic NLP sentiment analysis tasks and custom datasets:
 
-- [MNIST Digits](http://yann.lecun.com/exdb/mnist/), as a toy dataset for rapid prototyping
-- [Quark-Gluon](https://arxiv.org/abs/1902.08276), one of the main high-energy physics datasets used in the project, which contains images of the recordings of the CMS detector of quark and gluon jets.
-- [Electron-Photon](https://arxiv.org/abs/1807.11916), the other main high-energy physics dataset used in the project, which contains images of the recordings of the CMS detector of electron and photon showers.
-- [IMDb Reviews](https://www.tensorflow.org/datasets/catalog/imdb_reviews), as a toy dataset for evaluating the non-vision transformers for text.
+1. Sentiment Analysis (Tokenized with BPE Tokenization): **IMDb** Reviews, **Amazon** Cells, and **Yelp**. Each of these datasets contains 500 positive and 500 negative reviews, made by [Kotzias et al.](https://dl.acm.org/doi/10.1145/2783258.2783380), and can be found [here](https://www.kaggle.com/datasets/marklvl/sentiment-labelled-sentences-data-set).
+3. Custom Classifications (Tokenized with Word Level Tokenization): Custom **MC** and **RP** datasets. These datasets are created specifically for meaning classification and relative pronoun classification tasks, respectively, in QNLP context. Therefore, the sizes are quite small. They were made by [Lorenz et al.](http://dx.doi.org/10.1613/jair.1.14329) and can be found [here](https://github.com/CQCL/qnlp_lorenz_etal_2021_resources)
 
-The datasets are downloaded automatically when loading them for the first time. Note that they require a lot of disk space and can take a long time to preprocess.
+## Results and Observations
 
-## Installation
+The research results and publication are on their way. This readme shall later be updated once the publication is done.
 
-First, install [Python](https://www.python.org/downloads/) if you don't have it already. Then, to install the project together with the dependencies, run the following command in the root folder:
+## Project Structure
 
-```
-pip install -e .
-```
-
-## Usage
-
-After installation, you can run the notebooks in the `notebooks` folder. You can also import the library in your own code (`import quantum_transformers`).
-
-## Citation
-
-If you find this project helpful for your research, please cite our [paper](https://doi.org/10.3390/axioms13050323):
-
-```
-@Article{axioms13050323,
-AUTHOR = {Comajoan Cara, Marçal and Dahale, Gopal Ramesh and Dong, Zhongtian and Forestano, Roy T. and Gleyzer, Sergei and Justice, Daniel and Kong, Kyoungchul and Magorsch, Tom and Matchev, Konstantin T. and Matcheva, Katia and Unlu, Eyup B.},
-TITLE = {Quantum Vision Transformers for Quark–Gluon Classification},
-JOURNAL = {Axioms},
-VOLUME = {13},
-YEAR = {2024},
-NUMBER = {5},
-ARTICLE-NUMBER = {323},
-URL = {https://www.mdpi.com/2075-1680/13/5/323},
-ISSN = {2075-1680},
-DOI = {10.3390/axioms13050323}
-}
-```
-
+- `quantum_transformers/`: The library source code.
+  - `datasets.py`: Handles tokenization (BPE/WordLevel) and PyTorch DataLoader generation.
+  - `transformers.py`: Contains the Flax-based Transformer architecture integrating quantum layers.
+  - `quantum_layer.py`: Houses the logic for translating inputs to quantum states and defines the 5 custom VQC designs.
+- `notebooks/quantum/run_experiments.py`: The primary training pipeline loop for batch execution of experiments.
 
 ## Acknowledgements
 
-I would like to thank the mentors and fellow contributors from ML4SCI, especially [Sergei Gleyzer](http://sergeigleyzer.com/), for supervising the project and providing guidance and support. I would also like to thank the ML4SCI organization for giving me the opportunity to work on this project, and Google for sponsoring it and supporting the Google Summer of Code program. Likewise, I would also like to thank the [United States National Energy Research Scientific Computing Center (NERSC)](https://www.nersc.gov/) for providing me with the computing resources to run the experiments. Finally, I also want to thank all the developers of the open-source software that I have used for this project.
+I would like to express my gratitude to Universitas Indonesia for providing the hardware and computational resources necessary for the training and evaluation of these models.
+
+Additionally, this project builds upon the foundational Quantum Vision Transformers repository. Special thanks to Marçal Comajoan Cara, who developed the original architecture and QML framework evaluations as part of Google Summer of Code (GSoC) 2023 with the ML4SCI organization. Their robust codebase paved the way for this text classification research.
 
 ## License
 
-The project is licensed under the [GNU General Public License v3.0](LICENSE.md).
-
-## Contact
-
-If you have any questions, feel free to email me at [mcomajoancara@gmail.com](mailto:mcomajoancara@gmail.com).
+The project is licensed under the GNU General Public License v3.0.
